@@ -1,0 +1,15 @@
+{
+  "id": "20260730-test-topic",
+  "run_id": "f9fa2ab9-5db7-4e95-9081-5c22a00a2ade",
+  "title": "A Comprehensive Guide to test topic",
+  "slug": "test-topic",
+  "topic": "test topic",
+  "created_at": "2026-07-30T15:19:37.882439+00:00",
+  "revision_count": 2,
+  "is_approved": true,
+  "word_count": 477,
+  "faithfulness_score": 0.4706,
+  "overall_score": 4,
+  "assets": [],
+  "error_count": 7
+}

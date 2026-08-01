@@ -1,0 +1,50 @@
+# .gitignore for multi-agent-blog
+.env
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+.installed.cfg
+lib/
+lib64/
+*.so
+venv/
+env/
+ENV/
+.venv/
+.env/
+.ENV/
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.log
+*.log.*
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+output/
+outputs/
+*.md.bak
+generated_posts/
+
+# Blog post library: keep blog_posts/<post>/ (the actual generated posts),
+# but scratch space used mid-generation (chart images before a post is saved)
+# doesn't need to be tracked.
+blog_posts/_generation/
