@@ -318,11 +318,22 @@ def cli_serve(
     # (main.py), built once via create_fastapi_app(). There is no separate
     # `api.py` module — pointing uvicorn at "api:create_app" (as this used to)
     # raised ModuleNotFoundError on every `python main.py serve` call.
+    #
+    # `reload_excludes`: with --reload on, uvicorn's watchfiles watches the
+    # ENTIRE working directory by default — including blog_posts/, which
+    # the app itself writes to every time a post/asset is saved
+    # (storage/post_manager.py) or a sandbox snippet runs. Without this
+    # exclude, every generation triggers "N changes detected" and a full
+    # server restart mid-run, wiping the in-memory `_tasks` dict and
+    # potentially breaking a generation that's running or paused on HITL.
+    # --reload is meant for editing source code, not for excluding the
+    # app's own runtime output from being mistaken for a code change.
     uvicorn.run(
         "main:api_app",
         host=host,
         port=port,
         reload=reload,
+        reload_excludes=["blog_posts/*", "blog_posts/**"] if reload else None,
         log_level=settings.log_level.lower(),
     )
 

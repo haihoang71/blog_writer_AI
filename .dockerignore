@@ -1,0 +1,37 @@
+# .dockerignore
+# ─────────────────────────────────────────────────────────────────────────────
+# Keep the build context (and the image) small, and never bake secrets
+# (.env has real API keys) into an image layer — it's injected at
+# container start via docker-compose's `env_file` instead.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Secrets — passed in at runtime, never baked into the image
+.env
+
+# Local virtualenv (Windows-built; incompatible with the Linux image anyway)
+.venv/
+venv/
+
+# VCS / editor
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Python artefacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated output — mounted as a volume instead, no need to copy stale
+# local posts into the image at build time
+blog_posts/
+
+# Misc
+*.log
+.DS_Store
+Thumbs.db

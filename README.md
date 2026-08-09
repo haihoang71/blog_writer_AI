@@ -7,23 +7,24 @@
 ## Table of Contents
 
 1. [Quick Start](#quick-start)
-2. [Architecture Overview](#architecture-overview)
-3. [Project Structure](#project-structure)
-4. [Prerequisites](#prerequisites)
-5. [Environment Setup](#environment-setup)
-6. [Installing Dependencies](#installing-dependencies)
-7. [Configuration](#configuration)
-8. [Running Locally (CLI)](#running-locally-cli)
-9. [Running the API Server](#running-the-api-server)
-10. [Configuring Langfuse Tracing](#configuring-langfuse-tracing)
-11. [Mock Mode (No API Keys Required)](#mock-mode-no-api-keys-required)
-12. [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
-13. [Testing](#testing)
-14. [Evaluation Metrics](#evaluation-metrics)
-15. [Guardrail System](#guardrail-system)
-16. [Prompt Management](#prompt-management)
-17. [Extending the System](#extending-the-system)
-18. [Troubleshooting](#troubleshooting)
+2. [Docker (one-command run)](#docker-one-command-run)
+3. [Architecture Overview](#architecture-overview)
+4. [Project Structure](#project-structure)
+5. [Prerequisites](#prerequisites)
+6. [Environment Setup](#environment-setup)
+7. [Installing Dependencies](#installing-dependencies)
+8. [Configuration](#configuration)
+9. [Running Locally (CLI)](#running-locally-cli)
+10. [Running the API Server](#running-the-api-server)
+11. [Configuring Langfuse Tracing](#configuring-langfuse-tracing)
+12. [Mock Mode (No API Keys Required)](#mock-mode-no-api-keys-required)
+13. [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
+14. [Testing](#testing)
+15. [Evaluation Metrics](#evaluation-metrics)
+16. [Guardrail System](#guardrail-system)
+17. [Prompt Management](#prompt-management)
+18. [Extending the System](#extending-the-system)
+19. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -74,6 +75,35 @@ Notes on this project's current setup:
 - This runs against **Gemini** models by default (`OPENAI_API_KEY` holds a Google AI Studio key, `OPENAI_MODEL`/`OPENAI_MODEL_STRONG` are `gemini-*` names, and `OPENAI_API_BASE` points at Gemini's OpenAI-compatible endpoint) — not OpenAI itself. See [Configuration](#configuration) if you want to switch to real OpenAI or another provider.
 - The code sandbox (used by the Critic agent and the Sandbox tab) runs **locally only** — no E2B or other paid cloud sandbox is used or required.
 - PII redaction falls back to regex by default; it will **not** auto-download the ~400MB spaCy model. Run `python -m spacy download en_core_web_lg` yourself first if you want Presidio's NLP-based redaction instead.
+
+---
+
+## Docker (one-command run)
+
+The whole system (Web UI + API + agents) can also be packaged and run with a single command — no local Python/venv setup needed, only Docker.
+
+```bash
+make up
+```
+
+That builds the image (first run only — cached after that) and starts the container in the background. `make up` will also auto-create `.env` from `.env.example` the very first time if it's missing (you'll need to fill in real keys and re-run). Once it's up, open **http://localhost:8000/** exactly as in the non-Docker Quick Start above.
+
+Other commands:
+
+```bash
+make down      # stop the container
+make logs      # tail live logs
+make restart   # down + up
+make shell     # open a shell inside the running container
+make clean     # stop everything and remove the built image too
+```
+
+Generated posts land in `./blog_posts/` on your host machine (it's bind-mounted into the container), so the Library tab and the files on disk always match, Docker or not.
+
+Notes:
+- There's no separate Redis/Celery container. `config/settings.py` and `requirements.txt` reference them, but the running code (`main.py`) uses an in-memory task store + FastAPI `BackgroundTasks` for async generation — Celery/Redis aren't actually wired up anywhere, so a Redis container would just be dead weight. Add one later if that changes.
+- The ~400MB spaCy model for advanced PII detection is **not** downloaded during the image build (same "opt-in" philosophy as the non-Docker setup). Run `make shell` then `python -m spacy download en_core_web_lg` inside the container if you want it.
+- Don't have `make`? Run the two underlying commands directly: `docker compose up --build -d` and `docker compose down`.
 
 ---
 
@@ -171,6 +201,10 @@ multi-agent-blog/
 ├── pytest.ini                  ← Test configuration
 ├── .env.example                ← Environment variable template
 ├── .gitignore                  ├─────────────────────────────
+├── Dockerfile                  ← Single-image build (see Docker section)
+├── docker-compose.yml          ← One-service compose file
+├── .dockerignore                ← Build-context exclusions (never bakes .env in)
+├── Makefile                    ← `make up` / `make down` / `make logs` / ...
 │
 ├── config/
 │   ├── settings.py             ← Pydantic BaseSettings (env vars)

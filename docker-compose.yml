@@ -1,0 +1,40 @@
+# docker-compose.yml
+# ─────────────────────────────────────────────────────────────────────────────
+# One service: the FastAPI app (Web UI + API), built from ./Dockerfile.
+#
+# No redis/celery service here — see the NOTE at the top of Dockerfile for
+# why (those settings exist in config/settings.py but aren't actually used
+# by the running code; add a worker service later if that changes).
+#
+# Port is read from API_PORT in .env (docker compose auto-loads ./.env for
+# ${VAR} interpolation in this file — same .env that env_file: below
+# injects into the container, so the app inside always binds to the exact
+# port mapped here). To change the port, edit .env only — don't hardcode
+# a port here or in the Makefile, or the two can drift out of sync (the
+# app listens on whatever API_PORT it reads, regardless of what's mapped
+# here).
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: multi-agent-blog:latest
+    container_name: multi-agent-blog
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
+    env_file:
+      - .env
+    volumes:
+      # Generated posts + assets persist on the host and are browsable
+      # directly, matching the "post library" folder the app already
+      # manages under blog_posts/.
+      - ./blog_posts:/app/blog_posts
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:${API_PORT:-8000}/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
