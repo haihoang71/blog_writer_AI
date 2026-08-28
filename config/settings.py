@@ -116,6 +116,24 @@ class Settings(BaseSettings):
         default=True,
         description="Toggle Human-in-the-Loop interrupt node",
     )
+    data_dir: str = Field(
+        default="data",
+        description="SQLite + ground-truth directory (bind-mount in Docker)",
+    )
+    cors_origins: str = Field(
+        default="http://localhost:8000,http://127.0.0.1:8000,http://localhost:5173",
+        description="Comma-separated browser origins. Never '*" + "' in production.",
+    )
+    graph_timeout_seconds: int = Field(default=600, ge=5, le=3600)
+    enable_raw_trace_public: bool = Field(
+        default=False,
+        description="If false, raw Langfuse JSON is redacted for GET .../trace/raw",
+    )
+    admin_token: SecretStr = Field(
+        default="",
+        description="Optional bearer token for eval/ground-truth admin endpoints",
+    )
+    rate_limit_per_min: int = Field(default=60, ge=1, le=10000)
 
     # ── Computed helpers ─────────────────────────────────────────────────
     #

@@ -30,6 +30,9 @@ __pycache__/
 # Generated output — mounted as a volume instead, no need to copy stale
 # local posts into the image at build time
 blog_posts/
+data/*.sqlite3
+web/node_modules/
+web/dist/
 
 # Misc
 *.log

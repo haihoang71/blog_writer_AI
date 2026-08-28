@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 NODE_INPUT_GUARD = "input_guard"
+NODE_RUNTIME_PROBE = "runtime_probe"
 NODE_PLANNER = "planner"
 NODE_RESEARCHER = "researcher"
 NODE_ACADEMIC_RESEARCHER = "academic_researcher"
@@ -59,8 +60,8 @@ def route_after_input_guard(state: BlogState) -> str:
         logger.warning("Router: no sanitised topic after input guard — routing to end.")
         return NODE_END
 
-    logger.info("Router: input accepted — routing to planner.")
-    return NODE_PLANNER
+    logger.info("Router: input accepted — routing to runtime_probe.")
+    return NODE_RUNTIME_PROBE
 
 
 def route_after_researcher(state: BlogState) -> str:

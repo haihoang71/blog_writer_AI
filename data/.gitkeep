@@ -1,0 +1,1 @@
+# SQLite files are gitignored; this directory is bind-mounted in Docker.

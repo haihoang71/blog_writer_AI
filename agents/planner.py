@@ -139,7 +139,7 @@ def _mock_outline(topic: str) -> BlogOutline:
     slug = re.sub(r"[^a-z0-9\-]", "", slug)
 
     return BlogOutline(
-        title=f"A Comprehensive Guide to {topic}",
+        title=f"[MOCK] {topic}",
         slug=slug[:60],
         meta_description=f"Learn everything about {topic} — concepts, code examples, and best practices.",
         target_audience="Senior software engineers and ML practitioners",

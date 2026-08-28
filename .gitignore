@@ -48,3 +48,12 @@ generated_posts/
 # but scratch space used mid-generation (chart images before a post is saved)
 # doesn't need to be tracked.
 blog_posts/_generation/
+
+# Local run store / ground truth (never commit secrets or eval labels)
+data/*.sqlite3
+data/*.db
+data/eval/
+
+# Frontend
+web/node_modules/
+web/dist/
