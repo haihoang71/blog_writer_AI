@@ -46,8 +46,27 @@ generated_posts/
 fault_ground_truth/
 *.tar
 
-# Runtime/generated data and deployment staging snapshots are not source.
+# Runtime outputs and deployment artifacts
 blog_posts/
-blog_posts/_generation/
+fault_ground_truth/
 .deploy-src/
 README.txt
+*.tar
+*.tar.gz
+*.sqlite3
+*.db
+
+# Blog post library: keep blog_posts/<post>/ (the actual generated posts),
+# but scratch space used mid-generation (chart images before a post is saved)
+# doesn't need to be tracked.
+blog_posts/_generation/
+
+# Local run store / ground truth (never commit secrets or eval labels)
+data/*.sqlite3
+data/*.db
+data/eval/
+data/fault_ground_truth/
+
+# Frontend
+web/node_modules/
+web/dist/

@@ -20,6 +20,13 @@
 #   docker compose exec app python -m spacy download en_core_web_lg
 # ─────────────────────────────────────────────────────────────────────────────
 
+FROM node:20-alpine AS web
+WORKDIR /web
+COPY web/package.json ./
+RUN npm install
+COPY web/ ./
+RUN npm run build
+
 FROM python:3.11-slim
 
 # Build-time OS deps: gcc/g++ are needed for a couple of packages in
@@ -40,11 +47,12 @@ RUN pip install --no-cache-dir --upgrade pip \
 
 # Now copy the rest of the application source.
 COPY . .
+COPY --from=web /web/dist /app/web/dist
 
 # `blog_posts/` is where generated posts + assets live — mounted as a
 # volume in docker-compose.yml so they survive container restarts and
 # are browsable directly on the host filesystem.
-RUN mkdir -p blog_posts
+RUN mkdir -p blog_posts data
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1

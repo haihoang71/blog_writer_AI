@@ -9,6 +9,7 @@
 1. [Quick Start](#quick-start)
 2. [Docker (one-command run)](#docker-one-command-run)
 3. [Architecture Overview](#architecture-overview)
+3a. [AgentLens mock traces](#agentlens-mock-traces)
 4. [Project Structure](#project-structure)
 5. [Prerequisites](#prerequisites)
 6. [Environment Setup](#environment-setup)
@@ -51,11 +52,14 @@ pip install -r requirements.txt
 python main.py serve --reload
 ```
 
-Then open **http://localhost:8000/** in your browser. That's the whole app:
+Then open **http://localhost:8000/** in your browser. That's the whole app (React Trace Explorer, served from `web/dist` when built):
 
-- **Generate** tab — enter a topic, optionally tick "Human review (HITL)", watch it run, review/approve, download the Markdown.
-- **Library** tab — every post ever generated (via UI, CLI, or API) shows up here automatically, pulled from `blog_posts/`.
-- **Sandbox** tab — run ad-hoc Python (matplotlib charts included) in the same local sandbox the Critic agent uses.
+- **Generate** — topic, optional HITL, optional synthetic **fault scenario**, live SSE events.
+- **Trace Explorer** — prefers the real Langfuse observations (with SQLite fallback while a trace is pending), React Flow graph, timeline, span I/O, usage labels, and redacted raw JSON.
+- **Library** — every post under `blog_posts/`.
+- **Sandbox** — local Python (matplotlib) sandbox the Critic uses.
+
+Frontend (once): `cd web && npm install && npm run build`. Vite dev: `npm run dev` in `web/` (proxies `/api` to port 8000). If `web/dist` is missing, the API still runs and `/docs` works.
 
 There's no separate "start the UI" step — the UI *is* served by the same process, so `python main.py serve` is the only command you need day to day.
 
@@ -76,6 +80,7 @@ Notes on this project's current setup:
 - This runs against **Gemini** models by default (`OPENAI_API_KEY` holds a Google AI Studio key, `OPENAI_MODEL`/`OPENAI_MODEL_STRONG` are `gemini-*` names, and `OPENAI_API_BASE` points at Gemini's OpenAI-compatible endpoint) — not OpenAI itself. See [Configuration](#configuration) if you want to switch to real OpenAI or another provider.
 - The code sandbox (used by the Critic agent and the Sandbox tab) runs **locally only** — no E2B or other paid cloud sandbox is used or required.
 - PII redaction falls back to regex by default; it will **not** auto-download the ~400MB spaCy model. Run `python -m spacy download en_core_web_lg` yourself first if you want Presidio's NLP-based redaction instead.
+- With Langfuse keys enabled, each graph invocation creates a real root trace in the worker thread; LangGraph callbacks, provider generations, tools, and synthetic fault spans are linked under it. The Explorer shows that remote trace after completion and labels the SQLite view as a temporary fallback.
 
 ---
 
@@ -99,7 +104,7 @@ make shell     # open a shell inside the running container
 make clean     # stop everything and remove the built image too
 ```
 
-Generated posts land in `./blog_posts/` on your host machine (it's bind-mounted into the container), so the Library tab and the files on disk always match, Docker or not.
+Generated posts land in `./blog_posts/` on your host machine (it's bind-mounted into the container), so the Library tab and the files on disk always match, Docker or not. Run records, local observations, and off-trace ground truth live in `./data/` (also bind-mounted).
 
 Notes:
 - There's no separate Redis/Celery container. `config/settings.py` and `requirements.txt` reference them, but the running code (`main.py`) uses an in-memory task store + FastAPI `BackgroundTasks` for async generation — Celery/Redis aren't actually wired up anywhere, so a Redis container would just be dead weight. Add one later if that changes.
@@ -198,6 +203,51 @@ Notes:
 
 ---
 
+## AgentLens mock traces
+
+This repo can emit **Langfuse-shaped** traces so AgentLens detectors can be exercised without changing AgentLens itself.
+
+**Clean graph (unchanged agent roles):**
+
+`input_guard → runtime_probe → planner → researcher → (academic_researcher) → writer → critic → human_review → output_guard`
+
+Faults are a **bounded side branch** at `runtime_probe`. Recoverable scenarios still produce a blog post. They do **not** rewrite planner/writer prompts.
+
+| Scenario | What the probe adds | Typical AgentLens detector |
+|---|---|---|
+| `none` | One `token_probe` span, **unique input** per run, stable `agent_name=runtime_probe` | baseline (redundant must **not** fire across clean runs) |
+| `loop` | `loop_agent_a`/`loop_agent_b` × 3 | loop (`min_repeat=3`) |
+| `error` | `level=ERROR` tool span | error |
+| `timeout` | ERROR + `statusMessage` contains `timeout` | timeout (via error detector) |
+| `redundant` | two `writer` spans, identical canonical input | redundant (`min_duplicate_count=2`) |
+| `threshold` | 50k input tokens on the probe | threshold (needs ≥20 baseline samples of that agent) |
+| `bottleneck` | long `critic` self-time (sleep capped at 1.5s) | bottleneck (`share_threshold=0.3`) |
+| `hallucination` | draft contains `99.4%` / `max_iterations=999` with state keys | hallucination |
+| `prompt_injection` | jailbreak **in tool output only** | prompt_injection |
+| `cascading` | researcher 429 then writer symptom | error (+ later hallucination-shaped span) |
+
+**Usage contract** (what AgentLens `langfuse_client._map_observation` reads):
+
+- `usageDetails.input` / `usageDetails.output` / `totalCost`
+- mapped to span `prompt_tokens` / `completion_tokens` / `cost_usd`
+- UI labels: **Provider reported** / **Langfuse estimated** / **Synthetic** / **Unavailable**. Synthetic is never a bill. A free API key does not mean estimated cost is 0.
+
+**Ground truth** is written off-trace to `data/ground_truth.sqlite3` and ignored `data/fault_ground_truth/*.json` artifacts. Production observations **never** include `expected_detector` or the fault scenario label. Eval: `python scripts/eval_faults.py` creates a real `eval-fixture` Langfuse trace when tracing is configured. Admin: `GET /api/v1/runs/{id}/ground-truth` with `Authorization: Bearer $ADMIN_TOKEN`.
+
+**APIs**
+
+- `POST /api/v1/generate` `{ topic, enable_hitl, fault_scenario }`
+- `GET /api/v1/runs`, `/runs/{id}`, `/runs/{id}/trace`, `/trace/raw`, `/usage`, `/events`, `/stream` (SSE)
+- `GET /api/v1/faults`
+
+CLI: `python main.py generate --topic "..." --no-hitl --fault loop`
+
+HITL resume uses a **shared MemorySaver** (`get_graph(enable_hitl=...)`). Restarts lose in-memory checkpoints; SQLite still shows `paused`.
+
+Wall-clock timeout: `GRAPH_TIMEOUT_SECONDS` (default 600). CORS is an allow-list (`CORS_ORIGINS`), never `*` in production. Write endpoints are rate-limited.
+
+---
+
 ## Project Structure
 
 ```
@@ -258,12 +308,21 @@ multi-agent-blog/
 ├── graph/
 │   ├── workflow.py             ← StateGraph + HITL interrupt
 │   ├── router.py               ← Conditional edge logic
-│   └── middlewares.py          ← Node logging middleware
+│   ├── runtime_probe.py        ← Baseline probe + fault branch
+│   └── middlewares.py          ← Node logging + local observations
+│
+├── faults/                     ← Synthetic detector scenarios (off-trace labels)
+├── observability/              ← usageDetails contract, local normalizer
+├── storage/run_store.py        ← SQLite runs / events / observations
+├── api/                        ← run/trace/SSE routers
+├── web/                        ← React + Vite Trace Explorer
 │
 └── tests/
     ├── conftest.py             ← Forces deterministic offline test mode
     ├── test_fault_injection.py ← Four scenario + graph integration tests
     ├── test_workflow.py        ← Unit + integration tests
+    ├── test_usage_contract.py
+    ├── test_fault_scenarios.py
     └── evals/
         └── agent_evals.py      ← Faithfulness, relevance, code evals
 ```

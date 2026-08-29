@@ -1,4 +1,4 @@
-"""Fault scenario definitions shared by the CLI, API, UI, and graph."""
+"""Named fault scenarios. Ground-truth labels never go into production traces."""
 
 from __future__ import annotations
 
@@ -6,10 +6,7 @@ from enum import Enum
 
 
 class FaultScenario(str, Enum):
-    """Supported synthetic anomalies.
-
-    The string values intentionally match AgentLens' detector identifiers.
-    """
+    """Stable wire values used by the API, CLI and eval fixtures."""
 
     NONE = "none"
     LOOP = "loop"
@@ -19,17 +16,28 @@ class FaultScenario(str, Enum):
     BOTTLENECK = "bottleneck"
     HALLUCINATION = "hallucination"
     PROMPT_INJECTION = "prompt_injection"
+    TIMEOUT = "timeout"
+    CASCADING = "cascading"
 
 
-def coerce_fault_scenario(value: FaultScenario | str | None) -> FaultScenario:
-    """Return a validated scenario, treating blank values as ``none``."""
+ALL_SCENARIOS: tuple[str, ...] = tuple(item.value for item in FaultScenario)
+
+RECOVERABLE: dict[FaultScenario | str, bool] = {
+    scenario: True for scenario in FaultScenario
+}
+
+
+def parse_scenario(value: str | FaultScenario | None) -> FaultScenario:
+    """Normalize a JSON/CLI value while retaining Enum compatibility."""
     if isinstance(value, FaultScenario):
         return value
-    normalised = (value or FaultScenario.NONE.value).strip().lower()
+    name = str(value or FaultScenario.NONE.value).strip().lower()
     try:
-        return FaultScenario(normalised)
+        return FaultScenario(name)
     except ValueError as exc:
-        allowed = ", ".join(item.value for item in FaultScenario)
-        raise ValueError(
-            f"Unknown fault scenario {value!r}. Expected one of: {allowed}"
-        ) from exc
+        raise ValueError(f"Unknown fault scenario: {value!r}") from exc
+
+
+def coerce_fault_scenario(value: str | FaultScenario | None) -> FaultScenario:
+    """Backward-compatible name used by the original CLI/tests."""
+    return parse_scenario(value)

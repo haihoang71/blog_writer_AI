@@ -32,16 +32,18 @@ Usage
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 import typer
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+
+from pydantic import BaseModel, Field, field_validator
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -76,7 +78,18 @@ class GenerateRequest(BaseModel):
     topic: str
     enable_hitl: bool = False
     tags: list[str] = Field(default_factory=list)
-    fault_scenario: FaultScenario = FaultScenario.NONE
+    fault_scenario: FaultScenario | str = FaultScenario.NONE
+
+    @field_validator("fault_scenario", mode="before")
+    @classmethod
+    def _coerce_known_fault(cls, value):
+        if isinstance(value, str):
+            try:
+                return FaultScenario(value.strip().lower())
+            except ValueError:
+                # Giữ string để endpoint trả HTTP 400 rõ ràng.
+                return value
+        return value
 
 
 class ReviewRequest(BaseModel):
@@ -86,15 +99,19 @@ class ReviewRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     task_id: str
+    run_id: str | None = None
     status: str
     message: str
 
 
 class StatusResponse(BaseModel):
     task_id: str
+    run_id: str | None = None
     status: str
     result: dict | None = None
     error: str | None = None
+    execution_mode: str | None = None
+    fault_scenario: str | None = None
 
 
 class SandboxRequest(BaseModel):
@@ -157,6 +174,11 @@ def cli_generate(
         "--verbose", "-v",
         help="Show detailed agent steps",
     ),
+    fault: str = typer.Option(
+        "none",
+        "--fault",
+        help="Synthetic AgentLens fault scenario (none|loop|error|timeout|...)",
+    ),
 ) -> None:
     """
     Generate a complete blog post for the given topic.
@@ -182,27 +204,44 @@ def cli_generate(
     )
 
     from config.tracing import build_run_config, flush_langfuse
-    from graph.workflow import build_graph
+    from faults.injector import clear_scenario, register_scenario
+    from faults.scenarios import parse_scenario
+    from graph.workflow import get_graph
     from state.blog_state import initial_state
+    from storage.run_store import append_event, upsert_run
 
     thread_id = str(uuid.uuid4())
     state = initial_state(topic)
+    scenario = parse_scenario(fault)
+    metadata = dict(state.get("metadata") or {})
+    metadata["task_id"] = thread_id
+    state["metadata"] = metadata
+    upsert_run(
+        {
+            "run_id": state["run_id"],
+            "task_id": thread_id,
+            "topic": topic,
+            "fault_scenario": scenario.value,
+            "execution_mode": "live" if settings.is_openai_configured else "mock",
+            "status": "running",
+            "enable_hitl": hitl,
+            "started_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    append_event(state["run_id"], "cli_started", {"topic": topic, "fault": scenario.value})
+    register_scenario(state["run_id"], scenario)
 
     fault_tags = [] if fault is FaultScenario.NONE else ["synthetic-fault"]
 
     config = build_run_config(
         run_name=f"blog-{topic[:40]}",
-        tags=["cli", "blog-generation", *fault_tags],
-        metadata={
-            "topic": topic,
-            "thread_id": thread_id,
-            "eval_run_id": state["run_id"],
-            "synthetic_fault": fault is not FaultScenario.NONE,
-        },
+        tags=["cli", "blog-generation", "synthetic-ready"],
+        metadata={"topic": topic, "thread_id": thread_id},
     )
     config["configurable"] = {"thread_id": thread_id}
 
-    graph = build_graph(enable_hitl=hitl, fault_scenario=fault.value)
+    graph = get_graph(enable_hitl=hitl)
+    from services.generation import _invoke_with_timeout
 
     # ── Run graph ──────────────────────────────────────────────────────────
     with Progress(
@@ -214,10 +253,19 @@ def cli_generate(
         task = progress.add_task("Running agent pipeline...", total=None)
 
         try:
-            result = graph.invoke(state, config=config)
+            result = _invoke_with_timeout(graph, state, config, settings.graph_timeout_seconds)
         except Exception as exc:
             console.print(f"[red]❌ Graph failed: {exc}[/red]")
             logger.exception("Graph execution failed")
+            upsert_run(
+                {
+                    "run_id": state["run_id"],
+                    "status": "failed",
+                    "error": str(exc),
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+            clear_scenario(state["run_id"])
             raise typer.Exit(1)
 
     # ── HITL loop ──────────────────────────────────────────────────────────
@@ -243,7 +291,9 @@ def cli_generate(
                 "Enter feedback (or press Enter to approve)",
                 default="approve",
             )
-            result = graph.invoke(Command(resume=feedback), config=config)
+            result = _invoke_with_timeout(
+                graph, Command(resume=feedback), config, settings.graph_timeout_seconds
+            )
             interrupt_data = extract_interrupt_payload(result)
 
     # ── Display results ────────────────────────────────────────────────────
@@ -263,6 +313,15 @@ def cli_generate(
             f"[green]📁 Added to post library:[/green] blog_posts/{record['id']}/post.md"
         )
 
+    upsert_run(
+        {
+            "run_id": state["run_id"],
+            "status": "completed",
+            "ended_at": datetime.now(timezone.utc).isoformat(),
+        }
+    )
+    clear_scenario(state["run_id"])
+    append_event(state["run_id"], "cli_completed", {})
     flush_langfuse()
 
 
@@ -352,7 +411,9 @@ def cli_serve(
         host=host,
         port=port,
         reload=reload,
-        reload_excludes=["blog_posts/*", "blog_posts/**"] if reload else None,
+        reload_excludes=["blog_posts/*", "blog_posts/**", "data/*", "web/node_modules/*"]
+        if reload
+        else None,
         log_level=settings.log_level.lower(),
     )
 
@@ -435,130 +496,74 @@ def create_fastapi_app():
     from fastapi.responses import FileResponse, JSONResponse
     from fastapi.staticfiles import StaticFiles
 
+    from api.runs import router as runs_router
+    from api.security import RateLimitMiddleware, cors_origin_list
+    from services.generation import resume_review, start_generation, status_payload
+    from storage.run_store import init_db
+
+    init_db()
+
     fast_app = FastAPI(
         title="Multi-Agent Blog Generator API",
         description="Enterprise-grade multi-agent system for generating technical blog posts.",
-        version="1.0.0",
+        version="1.1.0",
         docs_url="/docs",
         redoc_url="/redoc",
     )
 
+    origins = cors_origin_list()
+    fast_app.add_middleware(RateLimitMiddleware)
     fast_app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=origins,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    fast_app.include_router(runs_router)
 
     static_dir = Path(__file__).parent / "static"
+    web_dist = Path(__file__).parent / "web" / "dist"
     if static_dir.exists():
         fast_app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    if web_dist.exists():
+        assets = web_dist / "assets"
+        if assets.exists():
+            fast_app.mount("/assets", StaticFiles(directory=str(assets)), name="web-assets")
 
-    # ── In-memory task store (replace with Redis in production) ───────────
-    _tasks: dict[str, dict] = {}
+    def _index_response():
+        spa = web_dist / "index.html"
+        if spa.exists():
+            return FileResponse(str(spa))
+        index_path = static_dir / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path))
+        return JSONResponse(
+            {
+                "message": "UI not built. Run `npm install && npm run build` in web/, or see /docs.",
+            }
+        )
 
-    # NOTE: request/response Pydantic models used to be defined right here,
-    # nested inside this function. That broke FastAPI's route-parameter
-    # resolution: this whole module has `from __future__ import annotations`
-    # (PEP 563), which turns every type annotation — including
-    # `request: GenerateRequest` and `background_tasks: BackgroundTasks`
-    # below — into a plain string at runtime. FastAPI resolves those
-    # strings via `typing.get_type_hints()`, which only looks in the
-    # *module's* global namespace, not this function's local scope. Since
-    # `GenerateRequest`/`BackgroundTasks` only existed as local names in
-    # here, resolution silently failed and FastAPI fell back to treating
-    # both parameters as required query params named "request" and
-    # "background_tasks" — which is why every `POST /api/v1/generate` call
-    # from the UI (which sends a JSON body, not query params) came back
-    # `422 Unprocessable Content`, `data.task_id` ended up `undefined` in
-    # the browser, and the UI then polled `/api/v1/status/undefined`
-    # forever. Moving the models (and the `fastapi`/`pydantic` imports they
-    # need) to module level fixes this: they're now resolvable via
-    # `main.py`'s globals like everything else in this file.
-
-    def _finalise_task(task_id: str, result: dict) -> None:
-        """Mark a task completed and persist the post to the library."""
-        from storage.post_manager import save_post
-
-        final_post = result.get("final_post") or result.get("draft", "")
-        record = None
-        if final_post:
-            try:
-                record = save_post(result)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("Failed to save post for task %s: %s", task_id, exc)
-
-        _tasks[task_id]["status"] = "completed"
-        _tasks[task_id]["result"] = {
-            "final_post": final_post,
-            "revision_count": result.get("revision_count", 0),
-            "is_approved": result.get("is_approved", False),
-            "word_count": len((final_post or "").split()),
-            "metadata": result.get("metadata", {}),
-            "error_count": len(result.get("error_logs", [])),
-            "post_id": record["id"] if record else None,
-            "fault_scenario": _tasks[task_id].get("fault_scenario", "none"),
-        }
-
-    async def _run_generation(
+    def _run_generation(
         task_id: str,
         topic: str,
         enable_hitl: bool,
         tags: list[str],
-        fault_scenario: FaultScenario,
-    ):
-        """Background task runner."""
-        from config.tracing import build_run_config, flush_langfuse
-        from graph.workflow import build_graph
-        from state.blog_state import initial_state
-
-        _tasks[task_id]["status"] = "running"
-        try:
-            graph = build_graph(
-                enable_hitl=enable_hitl,
-                fault_scenario=fault_scenario.value,
-            )
-            state = initial_state(topic)
-            fault_tags = (
-                []
-                if fault_scenario is FaultScenario.NONE
-                else ["synthetic-fault"]
-            )
-            config = build_run_config(
-                run_name=f"api-{topic[:30]}",
-                tags=["api", *tags, *fault_tags],
-                metadata={
-                    "topic": topic,
-                    "eval_run_id": state["run_id"],
-                    "synthetic_fault": fault_scenario is not FaultScenario.NONE,
-                },
-            )
-            config["configurable"] = {"thread_id": task_id}
-            _tasks[task_id]["config"] = config
-            _tasks[task_id]["run_id"] = state["run_id"]
-
-            result = graph.invoke(state, config=config)
-
-            interrupt = extract_interrupt_payload(result)
-            if enable_hitl and interrupt:
-                _tasks[task_id]["status"] = "paused"
-                _tasks[task_id]["result"] = {"interrupt": interrupt}
-            else:
-                _finalise_task(task_id, result)
-
-            flush_langfuse()
-        except Exception as exc:
-            logger.exception("API task %s failed", task_id)
-            _tasks[task_id]["status"] = "failed"
-            _tasks[task_id]["error"] = str(exc)
+        fault_scenario: FaultScenario | str,
+        run_id: str,
+    ) -> None:
+        start_generation(
+            topic=topic,
+            enable_hitl=enable_hitl,
+            tags=tags,
+            fault_scenario=fault_scenario,
+            task_id=task_id,
+            run_id=run_id,
+        )
 
     @fast_app.get("/")
     async def index():
-        index_path = static_dir / "index.html"
-        if index_path.exists():
-            return FileResponse(str(index_path))
-        return JSONResponse({"message": "UI not found — see /docs for the API."})
+        return _index_response()
 
     @fast_app.get("/health")
     async def health_check():
@@ -567,71 +572,84 @@ def create_fastapi_app():
             "openai": settings.is_openai_configured,
             "tavily": settings.is_tavily_configured,
             "langfuse": settings.is_langfuse_configured,
+            "execution_mode": "live" if settings.is_openai_configured else "mock",
+            "cors_origins": origins,
         }
 
     @fast_app.post("/api/v1/generate", response_model=GenerateResponse)
     async def generate_blog(request: GenerateRequest, background_tasks: BackgroundTasks):
+        from faults.scenarios import parse_scenario
+
+        scenario_value = (
+            request.fault_scenario.value
+            if isinstance(request.fault_scenario, FaultScenario)
+            else request.fault_scenario
+        )
+        try:
+            parse_scenario(scenario_value)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         task_id = str(uuid.uuid4())
-        _tasks[task_id] = {
-            "status": "queued",
-            "result": None,
-            "error": None,
-            "fault_scenario": request.fault_scenario.value,
-        }
+        run_id = str(uuid.uuid4())
+        from storage.run_store import upsert_run
+
+        upsert_run(
+            {
+                "run_id": run_id,
+                "task_id": task_id,
+                "topic": request.topic,
+                "fault_scenario": scenario_value,
+                "execution_mode": "live" if settings.is_openai_configured else "mock",
+                "status": "queued",
+                "enable_hitl": request.enable_hitl,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
         background_tasks.add_task(
             _run_generation,
             task_id=task_id,
             topic=request.topic,
             enable_hitl=request.enable_hitl,
             tags=request.tags,
-            fault_scenario=request.fault_scenario,
+            fault_scenario=scenario_value,
+            run_id=run_id,
         )
         return GenerateResponse(
             task_id=task_id,
+            run_id=run_id,
             status="queued",
-            message=f"Blog generation queued. Poll /api/v1/status/{task_id} for results.",
+            message=(
+                f"Blog generation queued. Poll /api/v1/status/{task_id} "
+                f"or stream /api/v1/runs/{run_id}/stream."
+            ),
         )
 
     @fast_app.get("/api/v1/status/{task_id}", response_model=StatusResponse)
     async def get_status(task_id: str):
-        if task_id not in _tasks:
+        payload = status_payload(task_id)
+        if payload is None:
             raise HTTPException(status_code=404, detail="Task not found")
-        task = _tasks[task_id]
         return StatusResponse(
             task_id=task_id,
-            status=task["status"],
-            result=task.get("result"),
-            error=task.get("error"),
+            run_id=payload.get("run_id"),
+            status=payload["status"],
+            result=payload.get("result"),
+            error=payload.get("error"),
+            execution_mode=payload.get("execution_mode"),
+            fault_scenario=payload.get("fault_scenario"),
         )
 
     @fast_app.post("/api/v1/review")
     async def submit_review(request: ReviewRequest):
         """Submit human feedback for a paused HITL task."""
-        from langgraph.types import Command
-
-        if request.task_id not in _tasks:
-            raise HTTPException(status_code=404, detail="Task not found")
-
-        task = _tasks[request.task_id]
-        config = task.get("config") or {"configurable": {"thread_id": request.task_id}}
-
         try:
-            from graph.workflow import get_graph
-
-            graph = get_graph()
-            result = graph.invoke(Command(resume=request.feedback), config=config)
-
-            interrupt = extract_interrupt_payload(result)
-            if interrupt:
-                # Sent back for another revision — still paused, awaiting review again.
-                task["status"] = "paused"
-                task["result"] = {"interrupt": interrupt}
-                return {"status": "paused", "task_id": request.task_id}
-
-            _finalise_task(request.task_id, result)
-            return {"status": "completed", "task_id": request.task_id}
+            return resume_review(request.task_id, request.feedback)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Task not found")
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail=str(exc)) from exc
         except Exception as exc:
-            raise HTTPException(status_code=500, detail=str(exc))
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     # ── Post library ────────────────────────────────────────────────────────
 
@@ -685,6 +703,13 @@ def create_fastapi_app():
             f"/api/v1/generation/{run_id}/assets/{name}" for name in outcome.get("artifacts", [])
         ]
         return outcome
+
+    @fast_app.get("/{path:path}")
+    async def spa_fallback(path: str):
+        blocked = ("api/", "docs", "redoc", "openapi.json", "health", "static/")
+        if path.startswith(blocked) or path in {"docs", "redoc", "openapi.json", "health"}:
+            raise HTTPException(status_code=404, detail="Not found")
+        return _index_response()
 
     return fast_app
 

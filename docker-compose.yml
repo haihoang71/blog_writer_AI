@@ -32,6 +32,8 @@ services:
       # directly, matching the "post library" folder the app already
       # manages under blog_posts/.
       - ./blog_posts:/app/blog_posts
+      # SQLite run store + off-trace ground truth (never Langfuse secrets).
+      - ./data:/app/data
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:${API_PORT:-8000}/health || exit 1"]
       interval: 30s
