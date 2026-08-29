@@ -17,14 +17,15 @@
 9. [Running Locally (CLI)](#running-locally-cli)
 10. [Running the API Server](#running-the-api-server)
 11. [Configuring Langfuse Tracing](#configuring-langfuse-tracing)
-12. [Mock Mode (No API Keys Required)](#mock-mode-no-api-keys-required)
-13. [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
-14. [Testing](#testing)
-15. [Evaluation Metrics](#evaluation-metrics)
-16. [Guardrail System](#guardrail-system)
-17. [Prompt Management](#prompt-management)
-18. [Extending the System](#extending-the-system)
-19. [Troubleshooting](#troubleshooting)
+12. [Controlled Fault Injection](#controlled-fault-injection)
+13. [Mock Mode (No API Keys Required)](#mock-mode-no-api-keys-required)
+14. [Human-in-the-Loop (HITL)](#human-in-the-loop-hitl)
+15. [Testing](#testing)
+16. [Evaluation Metrics](#evaluation-metrics)
+17. [Guardrail System](#guardrail-system)
+18. [Prompt Management](#prompt-management)
+19. [Extending the System](#extending-the-system)
+20. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -120,6 +121,12 @@ Notes:
               │   (input_guard.py)  │ ← Domain validation
               └──────────┬──────────┘ ← LLM classification
                          │ allow
+                         ▼
+              ┌─────────────────────┐
+              │    Runtime Probe    │ ← clean token baseline
+              │ (faults/injector.py)│ ← optional labelled fault
+              └──────────┬──────────┘
+                         │
                          ▼
               ┌─────────────────────┐
               │   Planner Agent     │ ← Structured outline (JSON)
@@ -232,6 +239,11 @@ multi-agent-blog/
 ├── state/
 │   └── blog_state.py           ← TypedDict + Pydantic state models
 │
+├── faults/
+│   ├── scenarios.py            ← Shared fault scenario enum
+│   ├── injector.py             ← Controlled Langfuse observations
+│   └── ground_truth.py         ← Eval labels kept outside the trace
+│
 ├── tools/
 │   ├── search_tools.py         ← Tavily + ArXiv LangChain tools
 │   └── code_interpreter.py     ← Local subprocess sandbox
@@ -249,6 +261,8 @@ multi-agent-blog/
 │   └── middlewares.py          ← Node logging middleware
 │
 └── tests/
+    ├── conftest.py             ← Forces deterministic offline test mode
+    ├── test_fault_injection.py ← Four scenario + graph integration tests
     ├── test_workflow.py        ← Unit + integration tests
     └── evals/
         └── agent_evals.py      ← Faithfulness, relevance, code evals
@@ -567,6 +581,58 @@ LANGFUSE_HOST=http://localhost:3000
 ```
 ENABLE_TRACING=false
 ```
+
+---
+
+## Controlled Fault Injection
+
+This repository can act as a deterministic trace source for AgentLens. Fault
+injection is off by default and does not change the normal blog agents. Select
+one scenario with the Web UI, the CLI, or the generation API:
+
+```bash
+python main.py generate --topic "Agent observability" --fault loop --no-hitl
+python main.py generate --topic "Agent observability" --fault redundant --no-hitl
+python main.py generate --topic "Agent observability" --fault bottleneck --no-hitl
+python main.py generate --topic "Agent observability" --fault threshold --no-hitl
+python main.py generate --topic "Agent observability" --fault error --no-hitl
+python main.py generate --topic "Agent observability" --fault hallucination --no-hitl
+python main.py generate --topic "Agent observability" --fault prompt_injection --no-hitl
+```
+
+```json
+POST /api/v1/generate
+{
+  "topic": "Agent observability",
+  "enable_hitl": false,
+  "fault_scenario": "loop",
+  "tags": ["agentlens-eval"]
+}
+```
+
+| Scenario | Trace emitted | Expected AgentLens detector |
+|---|---|---|
+| `none` | Normal pipeline plus a 240-token baseline probe | No finding |
+| `loop` | Four nested `research_coordinator ↔ source_retriever` repetitions | Loop |
+| `error` | Recoverable tool observation marked `ERROR` | Error |
+| `redundant` | Three generations from one agent receive identical input | Redundant Step |
+| `threshold` | Synthetic generation reports 30,000 tokens | Threshold |
+| `bottleneck` | `full_corpus_scan` blocks for 6 seconds | Bottleneck |
+| `hallucination` | A generated claim contains an unsupported quoted entity, date, and amount | Hallucination (experimental) |
+| `prompt_injection` | Untrusted tool output contains a known role-override phrase | Prompt Injection (experimental) |
+
+Threshold detection intentionally follows AgentLens' cold-start rule. Generate
+at least 20 `none` traces first so the stable
+`budget_estimate_generation` observation has a baseline; AgentLens should stay
+silent before that sample count.
+
+Fault traces receive the Langfuse tag `synthetic-fault` and an opaque
+`eval_run_id`. The answer is deliberately **not** written into the trace.
+Instead, `fault_ground_truth/<eval_run_id>.json` stores the expected detector,
+root-cause span name, symptom span name, and scenario parameters for the
+separate eval loader. Production AgentLens diagnosis must not read that folder.
+The injected prompt-injection string is observation-only: it is never copied
+into the real Planner/Researcher/Writer prompts.
 
 ---
 

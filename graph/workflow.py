@@ -12,6 +12,9 @@ Graph Architecture
   input_guard ──(blocked)──► [END]
      │ (allowed)
      ▼
+  runtime_probe (clean baseline or one selected fault)
+     │
+     ▼
   planner
      │
      ▼
@@ -68,11 +71,13 @@ from agents.researcher import researcher_node
 from agents.writer import writer_node
 from config.constants import MAX_REVISIONS
 from config.settings import get_settings
+from faults.injector import fault_injection_node
 from graph.middlewares import log_graph_end, log_graph_start, wrap_node
 from graph.router import (
     NODE_ACADEMIC_RESEARCHER,
     NODE_CRITIC,
     NODE_END,
+    NODE_FAULT_INJECTION,
     NODE_HUMAN_REVIEW,
     NODE_INPUT_GUARD,
     NODE_OUTPUT_GUARD,
@@ -260,7 +265,10 @@ def output_guard_node(state: BlogState) -> BlogState:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def build_graph(enable_hitl: bool = True) -> Any:
+def build_graph(
+    enable_hitl: bool = True,
+    fault_scenario: str = "none",
+) -> Any:
     """
     Construct and compile the LangGraph StateGraph.
 
@@ -269,6 +277,10 @@ def build_graph(enable_hitl: bool = True) -> Any:
     enable_hitl:
         When True, the ``human_review`` node will use ``interrupt()``
         to pause execution for human input. Set False for fully automated runs.
+    fault_scenario:
+        Controlled anomaly emitted by the isolated fault node. The value stays
+        outside ``BlogState`` so the trace under test does not contain its own
+        ground-truth label.
 
     Returns
     -------
@@ -281,6 +293,13 @@ def build_graph(enable_hitl: bool = True) -> Any:
     graph.add_node(
         NODE_INPUT_GUARD,
         wrap_node(NODE_INPUT_GUARD, input_guard_node),
+    )
+    def configured_fault_injection_node(state: BlogState) -> BlogState:
+        return fault_injection_node(state, fault_scenario=fault_scenario)
+
+    graph.add_node(
+        NODE_FAULT_INJECTION,
+        wrap_node(NODE_FAULT_INJECTION, configured_fault_injection_node),
     )
     graph.add_node(
         NODE_PLANNER,
@@ -313,6 +332,7 @@ def build_graph(enable_hitl: bool = True) -> Any:
 
     # ── Static edges ───────────────────────────────────────────────────────
     graph.add_edge(START, NODE_INPUT_GUARD)
+    graph.add_edge(NODE_FAULT_INJECTION, NODE_PLANNER)
     graph.add_edge(NODE_PLANNER, NODE_RESEARCHER)
     graph.add_edge(NODE_ACADEMIC_RESEARCHER, NODE_WRITER)
     graph.add_edge(NODE_WRITER, NODE_CRITIC)
@@ -323,7 +343,7 @@ def build_graph(enable_hitl: bool = True) -> Any:
         NODE_INPUT_GUARD,
         route_after_input_guard,
         {
-            NODE_PLANNER: NODE_PLANNER,
+            NODE_FAULT_INJECTION: NODE_FAULT_INJECTION,
             NODE_END: END,
         },
     )
@@ -367,7 +387,10 @@ def build_graph(enable_hitl: bool = True) -> Any:
     compiled = graph.compile(checkpointer=memory)
 
     logger.info(
-        "Graph compiled: HITL=%s, MAX_REVISIONS=%d", enable_hitl, MAX_REVISIONS
+        "Graph compiled: HITL=%s, fault=%s, MAX_REVISIONS=%d",
+        enable_hitl,
+        fault_scenario,
+        MAX_REVISIONS,
     )
     return compiled
 

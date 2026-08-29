@@ -43,8 +43,11 @@ output/
 outputs/
 *.md.bak
 generated_posts/
+fault_ground_truth/
+*.tar
 
-# Blog post library: keep blog_posts/<post>/ (the actual generated posts),
-# but scratch space used mid-generation (chart images before a post is saved)
-# doesn't need to be tracked.
+# Runtime/generated data and deployment staging snapshots are not source.
+blog_posts/
 blog_posts/_generation/
+.deploy-src/
+README.txt

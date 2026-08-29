@@ -184,14 +184,18 @@ def _run_local(
     wrapped = textwrap.dedent(
         f"""
 import sys
-import resource
-import signal
+
+try:
+    import resource
+except ImportError:
+    resource = None  # Windows: wall-clock timeout is enforced by the parent process
 
 # Limit CPU time
-try:
-    resource.setrlimit(resource.RLIMIT_CPU, ({min(timeout, 10)}, {min(timeout, 10)}))
-except Exception:
-    pass  # Windows doesn't support resource limits
+if resource is not None:
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU, ({min(timeout, 10)}, {min(timeout, 10)}))
+    except Exception:
+        pass
 
 # Limit max output
 class _LimitedStdout:

@@ -41,7 +41,7 @@ from typing import Optional
 
 import typer
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -51,6 +51,7 @@ from rich.table import Table
 # ── Logging setup ──────────────────────────────────────────────────────────
 from config.constants import LOG_FORMAT, LOG_DATE_FORMAT
 from config.settings import get_settings
+from faults.scenarios import FaultScenario
 
 settings = get_settings()
 
@@ -74,7 +75,8 @@ console = Console()
 class GenerateRequest(BaseModel):
     topic: str
     enable_hitl: bool = False
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
+    fault_scenario: FaultScenario = FaultScenario.NONE
 
 
 class ReviewRequest(BaseModel):
@@ -141,6 +143,15 @@ def cli_generate(
         "--hitl/--no-hitl",
         help="Enable Human-in-the-Loop review checkpoint",
     ),
+    fault: FaultScenario = typer.Option(
+        FaultScenario.NONE,
+        "--fault",
+        case_sensitive=False,
+        help=(
+            "Inject an AgentLens test fault: none, loop, error, redundant, "
+            "threshold, bottleneck, hallucination, or prompt_injection"
+        ),
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose", "-v",
@@ -164,6 +175,7 @@ def cli_generate(
             f"[bold cyan]Multi-Agent Blog Generator[/bold cyan]\n"
             f"Topic: [yellow]{topic}[/yellow]\n"
             f"HITL: [green]{hitl}[/green] | "
+            f"Fault: [yellow]{fault.value}[/yellow] | "
             f"Verbose: [green]{verbose}[/green]",
             title="[bold white]🤖 Starting Generation[/bold white]",
         )
@@ -176,14 +188,21 @@ def cli_generate(
     thread_id = str(uuid.uuid4())
     state = initial_state(topic)
 
+    fault_tags = [] if fault is FaultScenario.NONE else ["synthetic-fault"]
+
     config = build_run_config(
         run_name=f"blog-{topic[:40]}",
-        tags=["cli", "blog-generation"],
-        metadata={"topic": topic, "thread_id": thread_id},
+        tags=["cli", "blog-generation", *fault_tags],
+        metadata={
+            "topic": topic,
+            "thread_id": thread_id,
+            "eval_run_id": state["run_id"],
+            "synthetic_fault": fault is not FaultScenario.NONE,
+        },
     )
     config["configurable"] = {"thread_id": thread_id}
 
-    graph = build_graph(enable_hitl=hitl)
+    graph = build_graph(enable_hitl=hitl, fault_scenario=fault.value)
 
     # ── Run graph ──────────────────────────────────────────────────────────
     with Progress(
@@ -479,9 +498,16 @@ def create_fastapi_app():
             "metadata": result.get("metadata", {}),
             "error_count": len(result.get("error_logs", [])),
             "post_id": record["id"] if record else None,
+            "fault_scenario": _tasks[task_id].get("fault_scenario", "none"),
         }
 
-    async def _run_generation(task_id: str, topic: str, enable_hitl: bool, tags: list[str]):
+    async def _run_generation(
+        task_id: str,
+        topic: str,
+        enable_hitl: bool,
+        tags: list[str],
+        fault_scenario: FaultScenario,
+    ):
         """Background task runner."""
         from config.tracing import build_run_config, flush_langfuse
         from graph.workflow import build_graph
@@ -489,12 +515,24 @@ def create_fastapi_app():
 
         _tasks[task_id]["status"] = "running"
         try:
-            graph = build_graph(enable_hitl=enable_hitl)
+            graph = build_graph(
+                enable_hitl=enable_hitl,
+                fault_scenario=fault_scenario.value,
+            )
             state = initial_state(topic)
+            fault_tags = (
+                []
+                if fault_scenario is FaultScenario.NONE
+                else ["synthetic-fault"]
+            )
             config = build_run_config(
                 run_name=f"api-{topic[:30]}",
-                tags=["api"] + tags,
-                metadata={"topic": topic},
+                tags=["api", *tags, *fault_tags],
+                metadata={
+                    "topic": topic,
+                    "eval_run_id": state["run_id"],
+                    "synthetic_fault": fault_scenario is not FaultScenario.NONE,
+                },
             )
             config["configurable"] = {"thread_id": task_id}
             _tasks[task_id]["config"] = config
@@ -534,13 +572,19 @@ def create_fastapi_app():
     @fast_app.post("/api/v1/generate", response_model=GenerateResponse)
     async def generate_blog(request: GenerateRequest, background_tasks: BackgroundTasks):
         task_id = str(uuid.uuid4())
-        _tasks[task_id] = {"status": "queued", "result": None, "error": None}
+        _tasks[task_id] = {
+            "status": "queued",
+            "result": None,
+            "error": None,
+            "fault_scenario": request.fault_scenario.value,
+        }
         background_tasks.add_task(
             _run_generation,
             task_id=task_id,
             topic=request.topic,
             enable_hitl=request.enable_hitl,
             tags=request.tags,
+            fault_scenario=request.fault_scenario,
         )
         return GenerateResponse(
             task_id=task_id,
