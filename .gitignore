@@ -43,6 +43,8 @@ output/
 outputs/
 *.md.bak
 generated_posts/
+fault_ground_truth/
+*.tar
 
 # Runtime outputs and deployment artifacts
 blog_posts/

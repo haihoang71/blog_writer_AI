@@ -41,7 +41,9 @@ from typing import Optional
 
 import typer
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel, field_validator
+
+from pydantic import BaseModel, Field, field_validator
+
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -75,18 +77,17 @@ console = Console()
 class GenerateRequest(BaseModel):
     topic: str
     enable_hitl: bool = False
-    tags: list[str] = []
+    tags: list[str] = Field(default_factory=list)
     fault_scenario: FaultScenario | str = FaultScenario.NONE
 
     @field_validator("fault_scenario", mode="before")
     @classmethod
     def _coerce_known_fault(cls, value):
-        # Keep unknown values as strings so the endpoint can return its
-        # documented 400 response instead of Pydantic turning it into 422.
         if isinstance(value, str):
             try:
                 return FaultScenario(value.strip().lower())
             except ValueError:
+                # Giữ string để endpoint trả HTTP 400 rõ ràng.
                 return value
         return value
 
@@ -159,6 +160,15 @@ def cli_generate(
         "--hitl/--no-hitl",
         help="Enable Human-in-the-Loop review checkpoint",
     ),
+    fault: FaultScenario = typer.Option(
+        FaultScenario.NONE,
+        "--fault",
+        case_sensitive=False,
+        help=(
+            "Inject an AgentLens test fault: none, loop, error, redundant, "
+            "threshold, bottleneck, hallucination, or prompt_injection"
+        ),
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose", "-v",
@@ -187,6 +197,7 @@ def cli_generate(
             f"[bold cyan]Multi-Agent Blog Generator[/bold cyan]\n"
             f"Topic: [yellow]{topic}[/yellow]\n"
             f"HITL: [green]{hitl}[/green] | "
+            f"Fault: [yellow]{fault.value}[/yellow] | "
             f"Verbose: [green]{verbose}[/green]",
             title="[bold white]🤖 Starting Generation[/bold white]",
         )
@@ -219,6 +230,8 @@ def cli_generate(
     )
     append_event(state["run_id"], "cli_started", {"topic": topic, "fault": scenario.value})
     register_scenario(state["run_id"], scenario)
+
+    fault_tags = [] if fault is FaultScenario.NONE else ["synthetic-fault"]
 
     config = build_run_config(
         run_name=f"blog-{topic[:40]}",

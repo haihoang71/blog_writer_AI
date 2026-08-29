@@ -75,7 +75,7 @@
     margin-bottom: 18px;
   }
   label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
-  input[type=text], textarea {
+  input[type=text], select, textarea {
     width: 100%;
     background: var(--panel-2);
     border: 1px solid var(--border);
@@ -85,6 +85,7 @@
     font-size: 14px;
     font-family: inherit;
   }
+  select { cursor: pointer; }
   textarea { font-family: "SFMono-Regular", Consolas, monospace; resize: vertical; }
   .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .row > * { flex: 1; }
@@ -187,6 +188,20 @@
     <div class="card">
       <label for="topic-input">Blog topic</label>
       <input type="text" id="topic-input" placeholder="e.g. Building production RAG systems with LangChain" />
+      <label for="fault-select" style="margin-top:14px;">AgentLens fault scenario</label>
+      <select id="fault-select">
+        <option value="none">None — clean trace</option>
+        <option value="loop">Loop — repeated A ↔ B agent cycle</option>
+        <option value="error">Error — recoverable failed tool span</option>
+        <option value="redundant">Redundant — repeated identical agent input</option>
+        <option value="threshold">Threshold — synthetic 30k-token generation</option>
+        <option value="bottleneck">Bottleneck — one deliberately slow tool</option>
+        <option value="hallucination">Hallucination — unsupported entity and number</option>
+        <option value="prompt_injection">Prompt injection — jailbreak text in tool output</option>
+      </select>
+      <p class="muted" id="fault-help" style="margin:7px 0 0;">
+        All faults are bounded. Generate at least 20 clean traces before testing Threshold; Hallucination and Prompt injection are experimental detectors.
+      </p>
       <div class="row" style="margin-top:14px;">
         <div class="checkbox-row">
           <input type="checkbox" id="hitl-checkbox" />
@@ -321,6 +336,7 @@ generateBtn.addEventListener("click", async () => {
   const topic = document.getElementById("topic-input").value.trim();
   if (!topic) { alert("Enter a topic first."); return; }
   const hitl = document.getElementById("hitl-checkbox").checked;
+  const faultScenario = document.getElementById("fault-select").value;
 
   reviewCard.classList.add("hidden");
   resultCard.classList.add("hidden");
@@ -331,7 +347,12 @@ generateBtn.addEventListener("click", async () => {
   const res = await fetch(API + "/api/v1/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ topic, enable_hitl: hitl, tags: ["ui"] }),
+    body: JSON.stringify({
+      topic,
+      enable_hitl: hitl,
+      tags: ["ui"],
+      fault_scenario: faultScenario,
+    }),
   });
   const data = await res.json();
   currentTaskId = data.task_id;
@@ -377,8 +398,12 @@ function handleStatus(data) {
 function renderResult(result) {
   currentFinalPost = result.final_post || "";
   const approved = result.is_approved ? '<span class="pill ok">approved</span>' : '<span class="pill warn">force-passed</span>';
+  const faultScenario = result.fault_scenario;
+  const faultBadge = faultScenario && faultScenario !== "none"
+    ? ` &nbsp; · &nbsp; <span class="pill err">fault: ${escapeHtml(faultScenario)}</span>`
+    : "";
   document.getElementById("result-summary").innerHTML =
-    `${approved} &nbsp; ${result.word_count} words &nbsp; · &nbsp; ${result.revision_count} revision(s)` +
+    `${approved} &nbsp; ${result.word_count} words &nbsp; · &nbsp; ${result.revision_count} revision(s)${faultBadge}` +
     (result.metadata && result.metadata.faithfulness_score != null
       ? ` &nbsp; · &nbsp; faithfulness ${(result.metadata.faithfulness_score * 100).toFixed(0)}%`
       : "");

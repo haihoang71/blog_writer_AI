@@ -1,4 +1,9 @@
-"""Eval-only ground truth. Production traces must never contain expected_detector."""
+"""Persist fault labels outside Langfuse traces.
+
+AgentLens must diagnose the trace without seeing the answer. Ground truth is
+therefore written to a local eval artifact keyed by the graph run id instead of
+being attached to span or trace metadata.
+"""
 
 from __future__ import annotations
 

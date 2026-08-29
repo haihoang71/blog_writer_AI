@@ -71,12 +71,13 @@ from config.constants import MAX_REVISIONS
 from config.settings import get_settings
 from faults.injector import register_scenario
 from faults.scenarios import FaultScenario, parse_scenario
-from graph.middlewares import log_graph_end, log_graph_start, wrap_node
 from graph.runtime_probe import runtime_probe_node
+from graph.middlewares import log_graph_end, log_graph_start, wrap_node
 from graph.router import (
     NODE_ACADEMIC_RESEARCHER,
     NODE_CRITIC,
     NODE_END,
+    NODE_FAULT_INJECTION,
     NODE_HUMAN_REVIEW,
     NODE_INPUT_GUARD,
     NODE_OUTPUT_GUARD,
@@ -298,6 +299,13 @@ def build_graph(
         NODE_INPUT_GUARD,
         wrap_node(NODE_INPUT_GUARD, input_guard_node),
     )
+    def configured_fault_injection_node(state: BlogState) -> BlogState:
+        return fault_injection_node(state, fault_scenario=fault_scenario)
+
+    graph.add_node(
+        NODE_FAULT_INJECTION,
+        wrap_node(NODE_FAULT_INJECTION, configured_fault_injection_node),
+    )
     graph.add_node(
         NODE_RUNTIME_PROBE,
         wrap_node(NODE_RUNTIME_PROBE, configured_runtime_probe),
@@ -373,7 +381,10 @@ def build_graph(
 
     compiled = graph.compile(checkpointer=_checkpointer)
     logger.info(
-        "Graph compiled: HITL=%s, MAX_REVISIONS=%d", enable_hitl, MAX_REVISIONS
+        "Graph compiled: HITL=%s, fault=%s, MAX_REVISIONS=%d",
+        enable_hitl,
+        fault_scenario,
+        MAX_REVISIONS,
     )
     return compiled
 
