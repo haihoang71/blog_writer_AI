@@ -174,11 +174,6 @@ def cli_generate(
         "--verbose", "-v",
         help="Show detailed agent steps",
     ),
-    fault: str = typer.Option(
-        "none",
-        "--fault",
-        help="Synthetic AgentLens fault scenario (none|loop|error|timeout|...)",
-    ),
 ) -> None:
     """
     Generate a complete blog post for the given topic.
