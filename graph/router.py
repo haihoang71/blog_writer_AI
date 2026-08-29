@@ -23,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 NODE_INPUT_GUARD = "input_guard"
 NODE_RUNTIME_PROBE = "runtime_probe"
+# Compatibility name used by the earlier mock-system workflow.
+NODE_FAULT_INJECTION = NODE_RUNTIME_PROBE
 NODE_PLANNER = "planner"
 NODE_RESEARCHER = "researcher"
 NODE_ACADEMIC_RESEARCHER = "academic_researcher"

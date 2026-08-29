@@ -69,6 +69,8 @@ from agents.researcher import researcher_node
 from agents.writer import writer_node
 from config.constants import MAX_REVISIONS
 from config.settings import get_settings
+from faults.injector import register_scenario
+from faults.scenarios import FaultScenario, parse_scenario
 from graph.middlewares import log_graph_end, log_graph_start, wrap_node
 from graph.runtime_probe import runtime_probe_node
 from graph.router import (
@@ -267,7 +269,10 @@ _checkpointer = MemorySaver()
 _graphs: dict[bool, Any] = {}
 
 
-def build_graph(enable_hitl: bool = True) -> Any:
+def build_graph(
+    enable_hitl: bool = True,
+    fault_scenario: FaultScenario | str | None = None,
+) -> Any:
     """Construct and compile the LangGraph StateGraph.
 
     Parameters
@@ -275,8 +280,19 @@ def build_graph(enable_hitl: bool = True) -> Any:
     enable_hitl:
         When True, the ``human_review`` node will use ``interrupt()``
         to pause execution for human input. Set False for fully automated runs.
+    fault_scenario:
+        Optional compatibility hook for callers that configure a scenario at
+        graph-build time. The API normally registers it per run, outside the
+        graph state, so it cannot leak into Langfuse inputs.
     """
     graph = StateGraph(BlogState)
+
+    configured_scenario = parse_scenario(fault_scenario)
+
+    def configured_runtime_probe(state: BlogState) -> BlogState:
+        if configured_scenario is not FaultScenario.NONE:
+            register_scenario(str(state.get("run_id") or ""), configured_scenario)
+        return runtime_probe_node(state)
 
     graph.add_node(
         NODE_INPUT_GUARD,
@@ -284,7 +300,7 @@ def build_graph(enable_hitl: bool = True) -> Any:
     )
     graph.add_node(
         NODE_RUNTIME_PROBE,
-        wrap_node(NODE_RUNTIME_PROBE, runtime_probe_node),
+        wrap_node(NODE_RUNTIME_PROBE, configured_runtime_probe),
     )
     graph.add_node(
         NODE_PLANNER,

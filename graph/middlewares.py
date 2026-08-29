@@ -26,6 +26,22 @@ from state.blog_state import BlogState, ErrorLog
 logger = logging.getLogger(__name__)
 
 
+def _json_safe(value: Any) -> Any:
+    """Keep the SQLite fallback useful without serializing Pydantic objects raw."""
+    if hasattr(value, "model_dump"):
+        try:
+            return _json_safe(value.model_dump())
+        except Exception:  # noqa: BLE001
+            return str(value)
+    if isinstance(value, dict):
+        return {str(key): _json_safe(inner) for key, inner in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
 def wrap_node(
     node_name: str,
     node_fn: Callable[[BlogState], BlogState],
@@ -138,15 +154,12 @@ def wrap_node(
                         agent_name=node_name,
                         start=wall_start,
                         end=wall_end,
-                        input_value={
-                            "run_id": run_id,
-                            "revision": revision,
-                            "node": node_name,
-                        },
-                        output_value={"changes": changes},
+                        input_value={"state": _json_safe(state)},
+                        output_value={"state": _json_safe(result), "changes": changes},
                         extra_metadata={
                             "reads_state_keys": ["topic"] if node_name == "planner" else ["draft"],
                             "writes_state_keys": [node_name],
+                            "usage_source": "unavailable",
                         },
                     ),
                 )

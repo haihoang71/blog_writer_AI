@@ -103,6 +103,11 @@ def usage_from_langchain_response(response: Any, *, model: str | None = None) ->
     """Read provider-reported usage off a LangChain AIMessage when present."""
     meta = getattr(response, "response_metadata", None) or {}
     usage = meta.get("token_usage") or meta.get("usage") or {}
+    # Newer LangChain integrations expose normalized counts on the message
+    # itself, while OpenAI-compatible providers often keep token_usage in
+    # response_metadata. Support both so the trace reflects provider data.
+    if not usage:
+        usage = getattr(response, "usage_metadata", None) or {}
     inn = usage.get("prompt_tokens", usage.get("input_tokens"))
     out = usage.get("completion_tokens", usage.get("output_tokens"))
     total = usage.get("total_tokens")

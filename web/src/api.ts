@@ -28,16 +28,19 @@ export type Span = {
   status: string;
   status_message?: string | null;
   error_class?: string | null;
+  model?: string | null;
   input?: unknown;
   output?: unknown;
   input_tokens?: number;
   output_tokens?: number;
+  total_tokens?: number;
   cost_usd?: number | null;
   usage_source?: string;
   depth?: number;
   reads_state_keys?: string[] | null;
   writes_state_keys?: string[] | null;
   input_hash?: string | null;
+  metadata?: Record<string, unknown>;
 };
 
 export type UsageRollup = {
@@ -93,6 +96,9 @@ export const api = {
         run: RunRecord;
         normalized: { span_count: number; agent_count: number; error_count: number; spans: Span[] };
         usage: UsageRollup;
+        source: "langfuse" | "local_sqlite";
+        langfuse_pending?: boolean;
+        remote_trace?: Record<string, unknown> | null;
         graph_hint: string[];
       }>(r),
     ),

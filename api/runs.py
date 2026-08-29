@@ -50,6 +50,18 @@ def _load_run(run_id: str) -> dict[str, Any]:
     return row
 
 
+def _trace_observations(row: dict[str, Any]) -> tuple[list[dict[str, Any]], str, dict[str, Any] | None]:
+    """Return remote Langfuse observations when available, with local fallback."""
+    local = [strip_secrets(item) for item in list_observations(row["run_id"])]
+    trace_id = row.get("langfuse_trace_id")
+    terminal = row.get("status") in {"completed", "failed", "timeout", "paused"}
+    if trace_id and terminal and get_settings().is_langfuse_configured:
+        remote = fetch_raw_trace(str(trace_id))
+        if remote and isinstance(remote.get("observations"), list) and remote.get("observations"):
+            return [strip_secrets(item) for item in remote["observations"]], "langfuse", remote
+    return local, "local_sqlite", None
+
+
 @router.get("/faults")
 async def list_faults() -> dict[str, Any]:
     """Named synthetic scenarios. Labels never go onto Langfuse traces."""
@@ -80,17 +92,18 @@ async def api_get_run(run_id: str) -> dict[str, Any]:
 @router.get("/runs/{run_id}/trace")
 async def api_get_trace(run_id: str) -> dict[str, Any]:
     row = _load_run(run_id)
-    observations = [strip_secrets(item) for item in list_observations(row["run_id"])]
+    observations, source, remote = _trace_observations(row)
     normalized = normalize_observations(observations)
     usage = usage_rollup(normalized["spans"])
-    pending = bool(row.get("langfuse_trace_id")) and get_settings().is_langfuse_configured
+    configured = bool(row.get("langfuse_trace_id")) and get_settings().is_langfuse_configured
     return {
         "run": _public_run(row),
         "normalized": normalized,
         "usage": usage,
         "observation_count": len(observations),
-        "langfuse_pending": pending and not observations,
-        "source": "local_sqlite",
+        "langfuse_pending": configured and source != "langfuse",
+        "source": source,
+        "remote_trace": (strip_secrets(remote.get("trace")) if remote else None),
         "graph_hint": [
             "input_guard",
             "runtime_probe",
@@ -147,7 +160,7 @@ async def api_get_raw_trace(
 @router.get("/runs/{run_id}/usage")
 async def api_get_usage(run_id: str) -> dict[str, Any]:
     row = _load_run(run_id)
-    observations = list_observations(row["run_id"])
+    observations, _, _ = _trace_observations(row)
     normalized = normalize_observations(observations)
     rollup = usage_rollup(normalized["spans"])
     rollup["run_id"] = row["run_id"]

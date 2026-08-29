@@ -104,3 +104,5 @@ pre {
 .timeline-item:hover { background: var(--panel-2); }
 .bar { height: 8px; background: var(--accent); border-radius: 4px; }
 .disclaimer { font-size: 12px; color: var(--muted); margin-top: 8px; }
+.detail-meta { margin: 10px 0 14px; font-size: 12px; color: var(--muted); }
+.error-text { color: var(--danger); font-size: 13px; }

@@ -66,7 +66,9 @@ export default function ExplorerPage() {
       <div className="card">
         <h2>Trace Explorer</h2>
         <p className="muted">
-          Observed graph from stored spans (not the designed LangGraph). Usage
+          Observed graph from the Langfuse trace (SQLite is a temporary
+          fallback while the remote trace is pending; this is not the designed
+          LangGraph). Usage
           numbers are labeled Provider reported / Langfuse estimated / Synthetic /
           Unavailable — synthetic is never a bill.
         </p>
@@ -92,6 +94,9 @@ export default function ExplorerPage() {
               <span className={`badge ${trace.data.run.execution_mode === "live" ? "live" : "mock"}`}>
                 {trace.data.run.execution_mode}
               </span>
+              <span className={`badge ${trace.data.source === "langfuse" ? "live" : "mock"}`}>
+                trace: {trace.data.source === "langfuse" ? "Langfuse thật" : "SQLite fallback"}
+              </span>
               <span className="badge">fault: {trace.data.run.fault_scenario}</span>
               <span className="badge">{trace.data.usage.cost_label}</span>
               <span className="muted">
@@ -103,7 +108,14 @@ export default function ExplorerPage() {
               tokens in/out {trace.data.usage.input_tokens}/{trace.data.usage.output_tokens} · cost{" "}
               {trace.data.usage.cost_usd === null ? "unavailable" : `$${trace.data.usage.cost_usd.toFixed(4)}`}
             </p>
+            {trace.data.langfuse_pending && (
+              <p className="muted">Langfuse chưa trả observations; đang hiển thị bản ghi SQLite tạm thời. Làm mới sau vài giây.</p>
+            )}
             <p className="disclaimer">{trace.data.usage.disclaimer}</p>
+            <p className="muted">
+              Langfuse trace ID: <code>{trace.data.run.langfuse_trace_id ?? "chưa có"}</code>
+              {trace.data.remote_trace?.name ? ` · ${String(trace.data.remote_trace.name)}` : ""}
+            </p>
             <div className="tabs">
               {(["overview", "graph", "timeline", "span", "raw"] as const).map((name) => (
                 <button key={name} className={tab === name ? "on" : ""} onClick={() => setTab(name)}>
@@ -122,6 +134,7 @@ export default function ExplorerPage() {
                       <th>status</th>
                       <th>ms</th>
                       <th>tokens</th>
+                      <th>cost</th>
                       <th>usage</th>
                     </tr>
                   </thead>
@@ -135,6 +148,7 @@ export default function ExplorerPage() {
                         <td>
                           {span.input_tokens}/{span.output_tokens}
                         </td>
+                        <td>{span.cost_usd == null ? "—" : `$${span.cost_usd.toFixed(4)}`}</td>
                         <td>{span.usage_source}</td>
                       </tr>
                     ))}
@@ -174,8 +188,17 @@ export default function ExplorerPage() {
                   <>
                     <h3>{selected.agent_name} · {selected.name}</h3>
                     <p className="muted">
-                      {selected.status} · {selected.usage_source} · hash {selected.input_hash?.slice(0, 12)}
+                      {selected.status} · {selected.span_type ?? "span"} · {selected.usage_source} · hash {selected.input_hash?.slice(0, 12)}
                     </p>
+                    <div className="row detail-meta">
+                      <span>parent: {selected.parent_span_id ?? "root"}</span>
+                      <span>duration: {selected.duration_ms ?? "—"} ms</span>
+                      <span>self: {selected.self_time_ms ?? "—"} ms</span>
+                      <span>model: {selected.model ?? "—"}</span>
+                      <span>tokens: {selected.input_tokens ?? 0} in / {selected.output_tokens ?? 0} out</span>
+                      <span>cost: {selected.cost_usd == null ? "unavailable" : `$${selected.cost_usd.toFixed(4)}`}</span>
+                    </div>
+                    {selected.status_message && <p className="error-text">{selected.status_message}</p>}
                     <div className="grid2">
                       <div>
                         <label>Input</label>
@@ -186,11 +209,21 @@ export default function ExplorerPage() {
                         <pre>{JSON.stringify(selected.output, null, 2)}</pre>
                       </div>
                     </div>
+                    <label>Metadata / state links</label>
+                    <pre>{JSON.stringify({
+                      ...(selected.metadata ?? {}),
+                      reads_state_keys: selected.reads_state_keys,
+                      writes_state_keys: selected.writes_state_keys,
+                    }, null, 2)}</pre>
                   </>
                 )}
               </div>
             )}
-            {tab === "raw" && <pre>{JSON.stringify(raw.data, null, 2)}</pre>}
+            {tab === "raw" && (
+              raw.isLoading ? <p className="muted">Loading raw Langfuse payload…</p> :
+              raw.error ? <p className="error-text">{String(raw.error)}</p> :
+              <pre>{JSON.stringify(raw.data, null, 2)}</pre>
+            )}
           </div>
         </>
       )}

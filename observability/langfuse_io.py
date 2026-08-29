@@ -24,7 +24,7 @@ def fetch_raw_trace(trace_id: str) -> dict[str, Any] | None:
     host = settings.langfuse_host.rstrip("/")
     auth = (settings.langfuse_public_key, settings.langfuse_secret_key.get_secret_value())
     try:
-        with httpx.Client(timeout=20.0) as client:
+        with httpx.Client(timeout=8.0) as client:
             trace_resp = client.get(f"{host}/api/public/traces/{trace_id}", auth=auth)
             if trace_resp.status_code == 404:
                 return None
@@ -43,7 +43,7 @@ def fetch_raw_trace(trace_id: str) -> dict[str, Any] | None:
                 "observations": observations,
             }
             return _cap_payload(payload)
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, ValueError) as exc:
         logger.info("Langfuse raw fetch not ready: %s", type(exc).__name__)
         return None
 

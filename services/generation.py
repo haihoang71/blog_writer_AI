@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from config.settings import get_settings
 from config.tracing import build_run_config, flush_langfuse
+from faults.injector import clear_scenario, register_scenario
 from faults.scenarios import parse_scenario
 from graph.workflow import get_graph
 from state.blog_state import initial_state
@@ -85,12 +86,43 @@ def _persist_final_post(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _invoke_with_timeout(graph: Any, payload: Any, config: dict[str, Any], timeout: int) -> dict[str, Any]:
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        future = pool.submit(graph.invoke, payload, config)
-        try:
-            return future.result(timeout=timeout)
-        except FuturesTimeout as exc:
-            raise TimeoutError(f"graph invoke exceeded {timeout}s") from exc
+    # A context-manager executor waits for a running worker during __exit__,
+    # defeating the request timeout. Shutdown without waiting so the API can
+    # report timeout promptly. Python cannot safely kill an already-running
+    # thread; the graph worker may finish in the background and its Langfuse
+    # spans are still flushed by the worker when it returns.
+    def invoke() -> dict[str, Any]:
+        settings = get_settings()
+        if settings.is_langfuse_configured and config.get("callbacks"):
+            try:
+                from langfuse import get_client
+
+                client = get_client()
+                context_manager = client.start_as_current_observation(
+                    name=str(config.get("run_name") or "blog-generation"),
+                    as_type="chain",
+                    metadata=dict(config.get("metadata") or {}),
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("Could not create Langfuse root context: %s", type(exc).__name__)
+            else:
+                # LangChain's v3 callback handler starts child observations,
+                # but does not itself install a current OTEL span. Establish
+                # one in the same worker thread so synthetic runtime-probe
+                # spans can join the exact trace instead of becoming detached.
+                with context_manager:
+                    return graph.invoke(payload, config)
+        return graph.invoke(payload, config)
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(invoke)
+    try:
+        return future.result(timeout=timeout)
+    except FuturesTimeout as exc:
+        future.cancel()
+        raise TimeoutError(f"graph invoke exceeded {timeout}s") from exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def start_generation(
@@ -110,7 +142,6 @@ def start_generation(
         state["run_id"] = run_id
     run_id = str(state["run_id"])
     metadata = dict(state.get("metadata") or {})
-    metadata["fault_scenario"] = scenario
     metadata["task_id"] = task_id
     state["metadata"] = metadata
 
@@ -120,17 +151,18 @@ def start_generation(
             "run_id": run_id,
             "task_id": task_id,
             "topic": topic,
-            "fault_scenario": scenario,
+            "fault_scenario": scenario.value,
             "execution_mode": mode,
             "provider": "openai-compatible" if mode == "live" else "mock",
             "model": settings.openai_model,
             "status": "running",
             "enable_hitl": enable_hitl,
             "started_at": _now(),
-            "metadata_json": {"tags": tags, "fault_scenario": scenario},
+            "metadata_json": {"tags": tags},
         }
     )
-    append_event(run_id, "run_started", {"topic": topic, "fault_scenario": scenario})
+    append_event(run_id, "run_started", {"topic": topic, "fault_scenario": scenario.value})
+    register_scenario(run_id, scenario)
     cache_task(
         task_id,
         {
@@ -145,8 +177,8 @@ def start_generation(
     graph = get_graph(enable_hitl=enable_hitl)
     config = build_run_config(
         run_name=f"api-{topic[:30]}",
-        tags=["api", f"fault:{scenario}"] + tags,
-        metadata={"topic": topic, "fault_scenario": scenario, "task_id": task_id},
+        tags=["api", "synthetic-ready"] + tags,
+        metadata={"topic": topic, "task_id": task_id},
     )
     config["configurable"] = {"thread_id": task_id}
     cache_task(task_id, {"config": config, "enable_hitl": enable_hitl})
@@ -168,6 +200,7 @@ def start_generation(
         )
         append_event(run_id, "run_timeout", {"error": str(exc)})
         cache_task(task_id, {"status": "timeout", "error": str(exc)})
+        clear_scenario(run_id)
         flush_langfuse()
         return run_id
     except Exception as exc:  # noqa: BLE001
@@ -183,6 +216,7 @@ def start_generation(
         )
         append_event(run_id, "run_failed", {"error": type(exc).__name__})
         cache_task(task_id, {"status": "failed", "error": str(exc)})
+        clear_scenario(run_id)
         flush_langfuse()
         return run_id
 

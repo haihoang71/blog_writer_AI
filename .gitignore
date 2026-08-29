@@ -44,6 +44,16 @@ outputs/
 *.md.bak
 generated_posts/
 
+# Runtime outputs and deployment artifacts
+blog_posts/
+fault_ground_truth/
+.deploy-src/
+README.txt
+*.tar
+*.tar.gz
+*.sqlite3
+*.db
+
 # Blog post library: keep blog_posts/<post>/ (the actual generated posts),
 # but scratch space used mid-generation (chart images before a post is saved)
 # doesn't need to be tracked.
@@ -53,6 +63,7 @@ blog_posts/_generation/
 data/*.sqlite3
 data/*.db
 data/eval/
+data/fault_ground_truth/
 
 # Frontend
 web/node_modules/

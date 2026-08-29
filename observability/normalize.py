@@ -39,10 +39,18 @@ def normalize_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Return spans with parent/self-time/sequence matching AgentLens fields."""
     mapped = [map_langfuse_observation(row) for row in rows]
     by_external = {str(item["id"]): item for item in mapped if item.get("id")}
+    known_ids = set(by_external)
+    # Langfuse can return a page whose parent observation is on another page
+    # (or a trace root that has already aged out). Promote those observations
+    # to roots instead of silently dropping the entire subtree.
+    effective_parent: dict[str, str | None] = {}
     children: dict[str | None, list[str]] = {}
     for item in mapped:
-        parent = item.get("parent_observation_id")
-        children.setdefault(parent, []).append(str(item["id"]))
+        external_id = str(item.get("id"))
+        raw_parent = item.get("parent_observation_id")
+        parent = str(raw_parent) if raw_parent in known_ids else None
+        effective_parent[external_id] = parent
+        children.setdefault(parent, []).append(external_id)
 
     def _start_key(external_id: str) -> str:
         return str(by_external[external_id].get("start_time") or "")
@@ -53,8 +61,13 @@ def normalize_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
     spans: list[dict[str, Any]] = []
     sequence = 0
 
+    visited: set[str] = set()
+
     def walk(external_id: str, depth: int) -> None:
         nonlocal sequence
+        if external_id in visited:
+            return
+        visited.add(external_id)
         item = by_external[external_id]
         start = _parse_dt(item.get("start_time"))
         end = _parse_dt(item.get("end_time"))
@@ -90,7 +103,7 @@ def normalize_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
         spans.append(
             {
                 "id": external_id,
-                "parent_span_id": item.get("parent_observation_id"),
+                "parent_span_id": effective_parent.get(external_id),
                 "sequence_index": seq,
                 "agent_name": agent_name,
                 "name": item.get("name"),
@@ -123,10 +136,15 @@ def normalize_observations(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
     roots = children.get(None, [])
     if not roots and mapped:
-        roots = [str(mapped[0]["id"])]
+        roots = sorted(by_external, key=_start_key)
     for root_id in roots:
         if root_id in by_external:
             walk(root_id, 0)
+
+    # A malformed/cyclic response should still be inspectable in the UI.
+    for external_id in sorted(by_external, key=_start_key):
+        if external_id not in visited:
+            walk(external_id, 0)
 
     return {
         "span_count": len(spans),

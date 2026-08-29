@@ -80,8 +80,8 @@ def flush_langfuse() -> None:
         from langfuse import get_client  # type: ignore[import]
 
         get_client().flush()
-    except Exception:  # noqa: BLE001
-        pass  # silently ignore if not configured
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Langfuse flush failed: %s", type(exc).__name__)
 
 
 def build_run_config(

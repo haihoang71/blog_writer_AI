@@ -41,7 +41,7 @@ from typing import Optional
 
 import typer
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -51,6 +51,7 @@ from rich.table import Table
 # ── Logging setup ──────────────────────────────────────────────────────────
 from config.constants import LOG_FORMAT, LOG_DATE_FORMAT
 from config.settings import get_settings
+from faults.scenarios import FaultScenario
 
 settings = get_settings()
 
@@ -75,7 +76,19 @@ class GenerateRequest(BaseModel):
     topic: str
     enable_hitl: bool = False
     tags: list[str] = []
-    fault_scenario: str = "none"
+    fault_scenario: FaultScenario | str = FaultScenario.NONE
+
+    @field_validator("fault_scenario", mode="before")
+    @classmethod
+    def _coerce_known_fault(cls, value):
+        # Keep unknown values as strings so the endpoint can return its
+        # documented 400 response instead of Pydantic turning it into 422.
+        if isinstance(value, str):
+            try:
+                return FaultScenario(value.strip().lower())
+            except ValueError:
+                return value
+        return value
 
 
 class ReviewRequest(BaseModel):
@@ -180,6 +193,7 @@ def cli_generate(
     )
 
     from config.tracing import build_run_config, flush_langfuse
+    from faults.injector import clear_scenario, register_scenario
     from faults.scenarios import parse_scenario
     from graph.workflow import get_graph
     from state.blog_state import initial_state
@@ -189,7 +203,6 @@ def cli_generate(
     state = initial_state(topic)
     scenario = parse_scenario(fault)
     metadata = dict(state.get("metadata") or {})
-    metadata["fault_scenario"] = scenario
     metadata["task_id"] = thread_id
     state["metadata"] = metadata
     upsert_run(
@@ -197,23 +210,25 @@ def cli_generate(
             "run_id": state["run_id"],
             "task_id": thread_id,
             "topic": topic,
-            "fault_scenario": scenario,
+            "fault_scenario": scenario.value,
             "execution_mode": "live" if settings.is_openai_configured else "mock",
             "status": "running",
             "enable_hitl": hitl,
             "started_at": datetime.now(timezone.utc).isoformat(),
         }
     )
-    append_event(state["run_id"], "cli_started", {"topic": topic, "fault": scenario})
+    append_event(state["run_id"], "cli_started", {"topic": topic, "fault": scenario.value})
+    register_scenario(state["run_id"], scenario)
 
     config = build_run_config(
         run_name=f"blog-{topic[:40]}",
-        tags=["cli", "blog-generation", f"fault:{scenario}"],
-        metadata={"topic": topic, "thread_id": thread_id, "fault_scenario": scenario},
+        tags=["cli", "blog-generation", "synthetic-ready"],
+        metadata={"topic": topic, "thread_id": thread_id},
     )
     config["configurable"] = {"thread_id": thread_id}
 
     graph = get_graph(enable_hitl=hitl)
+    from services.generation import _invoke_with_timeout
 
     # ── Run graph ──────────────────────────────────────────────────────────
     with Progress(
@@ -225,7 +240,7 @@ def cli_generate(
         task = progress.add_task("Running agent pipeline...", total=None)
 
         try:
-            result = graph.invoke(state, config=config)
+            result = _invoke_with_timeout(graph, state, config, settings.graph_timeout_seconds)
         except Exception as exc:
             console.print(f"[red]❌ Graph failed: {exc}[/red]")
             logger.exception("Graph execution failed")
@@ -237,6 +252,7 @@ def cli_generate(
                     "ended_at": datetime.now(timezone.utc).isoformat(),
                 }
             )
+            clear_scenario(state["run_id"])
             raise typer.Exit(1)
 
     # ── HITL loop ──────────────────────────────────────────────────────────
@@ -262,7 +278,9 @@ def cli_generate(
                 "Enter feedback (or press Enter to approve)",
                 default="approve",
             )
-            result = graph.invoke(Command(resume=feedback), config=config)
+            result = _invoke_with_timeout(
+                graph, Command(resume=feedback), config, settings.graph_timeout_seconds
+            )
             interrupt_data = extract_interrupt_payload(result)
 
     # ── Display results ────────────────────────────────────────────────────
@@ -289,6 +307,7 @@ def cli_generate(
             "ended_at": datetime.now(timezone.utc).isoformat(),
         }
     )
+    clear_scenario(state["run_id"])
     append_event(state["run_id"], "cli_completed", {})
     flush_langfuse()
 
@@ -512,12 +531,12 @@ def create_fastapi_app():
             }
         )
 
-    async def _run_generation(
+    def _run_generation(
         task_id: str,
         topic: str,
         enable_hitl: bool,
         tags: list[str],
-        fault_scenario: str,
+        fault_scenario: FaultScenario | str,
         run_id: str,
     ) -> None:
         start_generation(
@@ -548,8 +567,13 @@ def create_fastapi_app():
     async def generate_blog(request: GenerateRequest, background_tasks: BackgroundTasks):
         from faults.scenarios import parse_scenario
 
+        scenario_value = (
+            request.fault_scenario.value
+            if isinstance(request.fault_scenario, FaultScenario)
+            else request.fault_scenario
+        )
         try:
-            parse_scenario(request.fault_scenario)
+            parse_scenario(scenario_value)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         task_id = str(uuid.uuid4())
@@ -561,7 +585,7 @@ def create_fastapi_app():
                 "run_id": run_id,
                 "task_id": task_id,
                 "topic": request.topic,
-                "fault_scenario": request.fault_scenario,
+                "fault_scenario": scenario_value,
                 "execution_mode": "live" if settings.is_openai_configured else "mock",
                 "status": "queued",
                 "enable_hitl": request.enable_hitl,
@@ -574,7 +598,7 @@ def create_fastapi_app():
             topic=request.topic,
             enable_hitl=request.enable_hitl,
             tags=request.tags,
-            fault_scenario=request.fault_scenario,
+            fault_scenario=scenario_value,
             run_id=run_id,
         )
         return GenerateResponse(

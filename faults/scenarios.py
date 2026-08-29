@@ -2,50 +2,42 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from enum import Enum
 
-FaultScenario = Literal[
-    "none",
-    "loop",
-    "error",
-    "redundant",
-    "threshold",
-    "bottleneck",
-    "hallucination",
-    "prompt_injection",
-    "timeout",
-    "cascading",
-]
 
-ALL_SCENARIOS: tuple[FaultScenario, ...] = (
-    "none",
-    "loop",
-    "error",
-    "redundant",
-    "threshold",
-    "bottleneck",
-    "hallucination",
-    "prompt_injection",
-    "timeout",
-    "cascading",
-)
+class FaultScenario(str, Enum):
+    """Stable wire values used by the API, CLI and eval fixtures."""
 
-RECOVERABLE: dict[FaultScenario, bool] = {
-    "none": True,
-    "loop": True,
-    "error": True,
-    "redundant": True,
-    "threshold": True,
-    "bottleneck": True,
-    "hallucination": True,
-    "prompt_injection": True,
-    "timeout": True,
-    "cascading": True,
+    NONE = "none"
+    LOOP = "loop"
+    ERROR = "error"
+    REDUNDANT = "redundant"
+    THRESHOLD = "threshold"
+    BOTTLENECK = "bottleneck"
+    HALLUCINATION = "hallucination"
+    PROMPT_INJECTION = "prompt_injection"
+    TIMEOUT = "timeout"
+    CASCADING = "cascading"
+
+
+ALL_SCENARIOS: tuple[str, ...] = tuple(item.value for item in FaultScenario)
+
+RECOVERABLE: dict[FaultScenario | str, bool] = {
+    scenario: True for scenario in FaultScenario
 }
 
 
-def parse_scenario(value: str | None) -> FaultScenario:
-    name = (value or "none").strip().lower()
-    if name not in ALL_SCENARIOS:
-        raise ValueError(f"unknown fault scenario: {value!r}")
-    return name  # type: ignore[return-value]
+def parse_scenario(value: str | FaultScenario | None) -> FaultScenario:
+    """Normalize a JSON/CLI value while retaining Enum compatibility."""
+    if isinstance(value, FaultScenario):
+        return value
+    name = str(value or FaultScenario.NONE.value).strip().lower()
+    try:
+        return FaultScenario(name)
+    except ValueError as exc:
+        raise ValueError(f"Unknown fault scenario: {value!r}") from exc
+
+
+def coerce_fault_scenario(value: str | FaultScenario | None) -> FaultScenario:
+    """Backward-compatible name used by the original CLI/tests."""
+    return parse_scenario(value)

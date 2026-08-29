@@ -54,7 +54,7 @@ python main.py serve --reload
 Then open **http://localhost:8000/** in your browser. That's the whole app (React Trace Explorer, served from `web/dist` when built):
 
 - **Generate** — topic, optional HITL, optional synthetic **fault scenario**, live SSE events.
-- **Trace Explorer** — observed span graph (React Flow), timeline, span I/O, usage labels, raw JSON.
+- **Trace Explorer** — prefers the real Langfuse observations (with SQLite fallback while a trace is pending), React Flow graph, timeline, span I/O, usage labels, and redacted raw JSON.
 - **Library** — every post under `blog_posts/`.
 - **Sandbox** — local Python (matplotlib) sandbox the Critic uses.
 
@@ -79,6 +79,7 @@ Notes on this project's current setup:
 - This runs against **Gemini** models by default (`OPENAI_API_KEY` holds a Google AI Studio key, `OPENAI_MODEL`/`OPENAI_MODEL_STRONG` are `gemini-*` names, and `OPENAI_API_BASE` points at Gemini's OpenAI-compatible endpoint) — not OpenAI itself. See [Configuration](#configuration) if you want to switch to real OpenAI or another provider.
 - The code sandbox (used by the Critic agent and the Sandbox tab) runs **locally only** — no E2B or other paid cloud sandbox is used or required.
 - PII redaction falls back to regex by default; it will **not** auto-download the ~400MB spaCy model. Run `python -m spacy download en_core_web_lg` yourself first if you want Presidio's NLP-based redaction instead.
+- With Langfuse keys enabled, each graph invocation creates a real root trace in the worker thread; LangGraph callbacks, provider generations, tools, and synthetic fault spans are linked under it. The Explorer shows that remote trace after completion and labels the SQLite view as a temporary fallback.
 
 ---
 
@@ -229,7 +230,7 @@ Faults are a **bounded side branch** at `runtime_probe`. Recoverable scenarios s
 - mapped to span `prompt_tokens` / `completion_tokens` / `cost_usd`
 - UI labels: **Provider reported** / **Langfuse estimated** / **Synthetic** / **Unavailable**. Synthetic is never a bill. A free API key does not mean estimated cost is 0.
 
-**Ground truth** is written to `data/ground_truth.sqlite3` only. Production observations **never** include `expected_detector`. Eval: `python scripts/eval_faults.py`. Admin: `GET /api/v1/runs/{id}/ground-truth` with `Authorization: Bearer $ADMIN_TOKEN`.
+**Ground truth** is written off-trace to `data/ground_truth.sqlite3` and ignored `data/fault_ground_truth/*.json` artifacts. Production observations **never** include `expected_detector` or the fault scenario label. Eval: `python scripts/eval_faults.py` creates a real `eval-fixture` Langfuse trace when tracing is configured. Admin: `GET /api/v1/runs/{id}/ground-truth` with `Authorization: Bearer $ADMIN_TOKEN`.
 
 **APIs**
 

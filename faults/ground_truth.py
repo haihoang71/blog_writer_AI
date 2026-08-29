@@ -10,6 +10,30 @@ from pathlib import Path
 from typing import Any
 
 _LOCK = threading.Lock()
+# Tests/deployments can override this path. By default artifacts live next to
+# the configured DATA_DIR so a Docker volume persists them with SQLite.
+GROUND_TRUTH_ROOT: Path | None = None
+
+
+def _json_root() -> Path:
+    if GROUND_TRUTH_ROOT is not None:
+        return Path(GROUND_TRUTH_ROOT)
+    from config.settings import get_settings
+
+    configured = getattr(get_settings(), "data_dir", None)
+    root = Path(str(configured)) if configured else Path("data")
+    return root / "fault_ground_truth"
+
+
+def write_ground_truth(run_id: str, record: dict[str, Any]) -> Path:
+    """Write a portable eval artifact, outside SQLite and Langfuse traces."""
+    root = _json_root()
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"{run_id}.json"
+    temporary = root / f".{run_id}.tmp"
+    temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    temporary.replace(target)
+    return target
 
 
 def _db_path() -> Path:
@@ -82,6 +106,17 @@ def record(
             conn.commit()
         finally:
             conn.close()
+    write_ground_truth(
+        run_id,
+        {
+            "run_id": run_id,
+            "eval_run_id": eval_run_id,
+            "task_id": task_id,
+            "langfuse_trace_id": langfuse_trace_id,
+            "scenario": scenario,
+            "payload": payload,
+        },
+    )
 
 
 def get(run_id: str) -> dict[str, Any] | None:
