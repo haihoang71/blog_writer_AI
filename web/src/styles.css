@@ -94,6 +94,37 @@ pre {
   font-size: 12px;
   max-height: 420px;
 }
+.markdown-preview {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 18px 22px;
+  margin-top: 12px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3,
+.markdown-preview h4,
+.markdown-preview h5,
+.markdown-preview h6 { margin: 0.8em 0 0.35em; line-height: 1.25; }
+.markdown-preview h1 { font-size: 1.7rem; }
+.markdown-preview h2 { font-size: 1.4rem; }
+.markdown-preview h3 { font-size: 1.15rem; }
+.markdown-preview p { margin: 0.7em 0; }
+.markdown-preview ul,
+.markdown-preview ol { padding-left: 1.5em; }
+.markdown-preview code {
+  background: #11151e;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9em;
+}
+.markdown-preview pre { margin: 1em 0; }
+.markdown-preview pre code { background: transparent; padding: 0; }
+.markdown-preview a { text-decoration: underline; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 @media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } }
 .flow { height: 420px; background: #0c0e14; border: 1px solid var(--border); border-radius: 8px; }
@@ -102,6 +133,10 @@ pre {
 .tabs button.on { color: var(--text); border-color: var(--accent); }
 .timeline-item { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); cursor: pointer; }
 .timeline-item:hover { background: var(--panel-2); }
+.timeline-label { width: 190px; flex: 0 0 190px; overflow-wrap: anywhere; }
+.timeline-track { flex: 1; min-width: 120px; align-self: center; background: #11151e; border-radius: 4px; overflow: hidden; }
+.timeline-track .bar { min-width: 2px; }
+.timeline-value { width: 150px; flex: 0 0 150px; text-align: right; }
 .bar { height: 8px; background: var(--accent); border-radius: 4px; }
 .disclaimer { font-size: 12px; color: var(--muted); margin-top: 8px; }
 .detail-meta { margin: 10px 0 14px; font-size: 12px; color: var(--muted); }

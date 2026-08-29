@@ -77,7 +77,6 @@ from graph.router import (
     NODE_ACADEMIC_RESEARCHER,
     NODE_CRITIC,
     NODE_END,
-    NODE_FAULT_INJECTION,
     NODE_HUMAN_REVIEW,
     NODE_INPUT_GUARD,
     NODE_OUTPUT_GUARD,
@@ -298,13 +297,6 @@ def build_graph(
     graph.add_node(
         NODE_INPUT_GUARD,
         wrap_node(NODE_INPUT_GUARD, input_guard_node),
-    )
-    def configured_fault_injection_node(state: BlogState) -> BlogState:
-        return fault_injection_node(state, fault_scenario=fault_scenario)
-
-    graph.add_node(
-        NODE_FAULT_INJECTION,
-        wrap_node(NODE_FAULT_INJECTION, configured_fault_injection_node),
     )
     graph.add_node(
         NODE_RUNTIME_PROBE,

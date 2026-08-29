@@ -38,6 +38,20 @@ export default function ExplorerPage() {
   });
 
   const spans = trace.data?.normalized.spans ?? [];
+  const timelineStats = useMemo(() => {
+    const totals = new Map<string, { agent: string; total: number; calls: number }>();
+    spans.forEach((span) => {
+      const duration = Math.max(0, Number(span.duration_ms ?? 0));
+      const current = totals.get(span.agent_name) ?? { agent: span.agent_name, total: 0, calls: 0 };
+      current.total += duration;
+      current.calls += 1;
+      totals.set(span.agent_name, current);
+    });
+    const byAgent = Array.from(totals.values());
+    const maxTotal = Math.max(...byAgent.map((item) => item.total), 1);
+    const maxCall = Math.max(...spans.map((span) => Number(span.duration_ms ?? 0)), 1);
+    return { byAgent, maxTotal, maxCall };
+  }, [spans]);
   const { nodes, edges } = useMemo(() => {
     const ns: Node[] = spans.map((span, index) => ({
       id: span.id,
@@ -170,15 +184,36 @@ export default function ExplorerPage() {
             )}
             {tab === "timeline" && (
               <div>
-                {spans.map((span) => (
-                  <div key={span.id} className="timeline-item" onClick={() => { setSelected(span); setTab("span"); }}>
-                    <div style={{ width: 160 }}>{span.agent_name}</div>
-                    <div style={{ flex: 1 }}>
-                      <div className="bar" style={{ width: `${Math.min(span.duration_ms ?? 4, 400) / 4}%` }} />
+                <h3>Time by node (all calls aggregated)</h3>
+                <p className="muted">
+                  Total wall time per agent. Revisions are included, so five Writer calls are summed together.
+                </p>
+                {timelineStats.byAgent.map((item) => (
+                  <div key={item.agent} className="timeline-item timeline-total">
+                    <div className="timeline-label">{item.agent}</div>
+                    <div className="timeline-track">
+                      <div className="bar" style={{ width: `${(item.total / timelineStats.maxTotal) * 100}%` }} />
                     </div>
-                    <div className="muted">{span.duration_ms ?? 0} ms · {span.status}</div>
+                    <div className="muted timeline-value">{Math.round(item.total)} ms · {item.calls} call{item.calls === 1 ? "" : "s"}</div>
                   </div>
                 ))}
+
+                <h3 style={{ marginTop: 24 }}>Time by call (chronological)</h3>
+                <p className="muted">
+                  Each observation is shown separately in trace order. Click a row to inspect its input/output and tokens.
+                </p>
+                {spans.map((span, index) => {
+                  const duration = Math.max(0, Number(span.duration_ms ?? 0));
+                  return (
+                    <div key={span.id} className="timeline-item" onClick={() => { setSelected(span); setTab("span"); }}>
+                      <div className="timeline-label">{index + 1}. {span.agent_name}</div>
+                      <div className="timeline-track">
+                        <div className="bar" style={{ width: `${(duration / timelineStats.maxCall) * 100}%` }} />
+                      </div>
+                      <div className="muted timeline-value">{Math.round(duration)} ms · {span.status}</div>
+                    </div>
+                  );
+                })}
               </div>
             )}
             {tab === "span" && (

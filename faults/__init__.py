@@ -29,6 +29,7 @@ __all__ = [
     "parse_scenario",
     "record_ground_truth",
     "register_scenario",
+]
 """Controlled fault injection for AgentLens trace generation."""
 
 from faults.injector import fault_injection_node
